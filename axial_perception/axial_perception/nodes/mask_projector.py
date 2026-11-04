@@ -12,6 +12,7 @@ from tf2_ros import Buffer, TransformListener
 from axial_perception.core.camera import project, quat_to_matrix, transform
 from axial_perception.core.clusters import label_points
 from axial_perception.core.masks import decode_gz_instance
+from axial_perception.core.occlusion import front_mask
 from axial_perception.core.scan_buffer import ScanBuffer
 
 PALETTE = np.array([
@@ -37,6 +38,8 @@ class MaskProjector(Node):
             "n_scans": 5,
             "depth_min": 0.1,
             "depth_max": 30.0,
+            "occlusion_window": 9,
+            "occlusion_tol": 0.1,
             "axial_classes": [4, 6, 8],
             "min_points": 5,
             "max_rate_hz": 10.0,
@@ -112,6 +115,10 @@ class MaskProjector(Node):
         pts = transform(self.scans.points(), *tf)
         class_img, mask_img = decode_gz_instance(msg.data, msg.height, msg.width)
         u, v, idx = project(pts, self.K, msg.width, msg.height, self.p["depth_min"], self.p["depth_max"])
+        if self.p["occlusion_window"] > 0:
+            front = front_mask(u, v, pts[idx, 2], msg.width, msg.height,
+                               self.p["occlusion_window"], self.p["occlusion_tol"])
+            u, v, idx = u[front], v[front], idx[front]
         kept, cls, seg = label_points(u, v, idx, class_img, mask_img, self.p["axial_classes"], self.p["min_points"])
 
         self.publish_clusters(msg.header.stamp, frame, pts[kept], cls, seg)
