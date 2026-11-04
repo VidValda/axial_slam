@@ -14,6 +14,8 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
 5. Each mask is split into straight lines with `split_method` (`core/segments.py`). `ransac` fits lines one after
    the other within `split_tol` of the class, then cuts each line where its points are more than `split_gap` apart.
    Lines with fewer than `split_min_points` points are dropped and their points get `line` 0.
+   `pearl` is a PEARL-style alternative: proposals from RANSAC, then points are re-assigned by minimising
+   distance cost + k-NN smoothness + a cost per line. It is about 6x slower than `ransac`.
 
 The ROS-free maths lives in `axial_perception/core` and is covered by `colcon test`.
 
@@ -38,7 +40,7 @@ Parameters, with defaults:
 | `occlusion_window`, `occlusion_tol` | 9, 0.1 | z-buffer window in px (0 turns it off) and tolerance in m |
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
 | `min_points` | 5 | smallest cluster |
-| `split_method` | `ransac` | `none`, `ransac` (see `METHODS` in `core/segments.py`) |
+| `split_method` | `ransac` | `none`, `ransac`, `pearl` (see `METHODS` in `core/segments.py`) |
 | `split_tol` | `[0.1, 0.3, 0.3]` | point-to-line tolerance in m per class of `axial_classes` |
 | `split_min_points`, `split_gap` | 5, 0.5 | smallest line, and the gap in m that cuts a line (0 turns it off) |
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |

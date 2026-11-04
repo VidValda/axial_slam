@@ -31,6 +31,27 @@ def gap_split(pts, labels, gap, min_points):
     return out
 
 
+def knn(pts, k):
+    sq = (pts * pts).sum(1)
+    d = sq[:, None] + sq[None] - 2 * pts @ pts.T
+    np.fill_diagonal(d, np.inf)
+    return np.argpartition(d, k - 1, axis=1)[:, :k]
+
+
+def random_lines(pts, n, rng):
+    i, j = rng.integers(len(pts), size=(2, n))
+    d = pts[j] - pts[i]
+    norm = np.linalg.norm(d, axis=1)
+    ok = norm > 1e-6
+    return pts[i[ok]], d[ok] / norm[ok, None]
+
+
+def dist2(pts, c, d):
+    """Squared distances (lines x points) from pts to the lines through c along unit d."""
+    r = pts[None] - c[:, None]
+    return (r * r).sum(-1) - np.einsum("hnk,hk->hn", r, d) ** 2
+
+
 def no_split(pts, tol, min_points, gap, rng):
     return np.full(len(pts), int(len(pts) >= min_points))
 
@@ -40,17 +61,11 @@ def ransac(pts, tol, min_points, gap, rng, iters=100):
     free = np.arange(len(pts))
     while len(free) >= max(min_points, 2):
         p = pts[free]
-        i, j = rng.integers(len(p), size=(2, iters))
-        d = p[j] - p[i]
-        norm = np.linalg.norm(d, axis=1)
-        ok = norm > 1e-6
-        if not ok.any():
+        c, d = random_lines(p, iters, rng)
+        if not len(c):
             break
-        i, d = i[ok], d[ok] / norm[ok, None]
-        r = p[None] - p[i][:, None]
-        dist2 = (r * r).sum(-1) - np.einsum("hnk,hk->hn", r, d) ** 2
-        best = np.argmax((dist2 < tol * tol).sum(1))
-        inl = dist2[best] < tol * tol
+        inl = dist2(p, c, d) < tol * tol
+        inl = inl[np.argmax(inl.sum(1))]
         if inl.sum() < min_points:
             break
         inl = line_distance(p, *fit_line(p[inl])) < tol
@@ -61,7 +76,62 @@ def ransac(pts, tol, min_points, gap, rng, iters=100):
     return gap_split(pts, labels, gap, min_points)
 
 
-METHODS = {"none": no_split, "ransac": ransac}
+def pearl(pts, tol, min_points, gap, rng, proposals=30, k=6, smooth=0.3, label_cost=5.0, deadzone=0.7, sweeps=10):
+    """PEARL-style: line proposals, then ICM on data cost + Potts on a k-NN graph + a label cost per line."""
+    def data(d2):
+        return (np.maximum(np.sqrt(np.maximum(d2, 0)) - deadzone * tol, 0) / ((1 - deadzone) * tol)) ** 2
+
+    n = len(pts)
+    if n < max(min_points, 3):
+        return np.zeros(n, int)
+    seed = ransac(pts, tol, min_points, 0, rng)
+    lines = [fit_line(pts[seed == s]) for s in range(1, seed.max() + 1)]
+    c, d = random_lines(pts, proposals, rng)
+    c = np.concatenate([np.reshape([l[0] for l in lines], (-1, 3)), c])
+    d = np.concatenate([np.reshape([l[1] for l in lines], (-1, 3)), d])
+    if not len(c):
+        return np.zeros(n, int)
+    k = min(k, n - 1)
+    nbr = knn(pts, k)
+    cost = np.column_stack([np.ones(n), data(dist2(pts, c, d)).T])
+    labels = cost.argmin(axis=1)
+    for _ in range(sweeps):
+        keep = prune(cost, label_cost)
+        cost = cost[:, keep]
+        labels = np.where(keep[labels], np.cumsum(keep)[labels] - 1, -1)
+        counts = (labels[nbr][..., None] == np.arange(cost.shape[1])).sum(1)
+        new = (cost + smooth * (k - counts)).argmin(axis=1)
+        for l in np.flatnonzero(np.bincount(new, minlength=cost.shape[1])[1:] >= 2) + 1:
+            cost[:, l] = data(line_distance(pts, *fit_line(pts[new == l])) ** 2)
+        if np.array_equal(new, labels):
+            break
+        labels = new
+    return gap_split(pts, labels, gap, min_points)
+
+
+def prune(cost, label_cost):
+    """Columns to keep: drops unused lines, then the line that saves least over the next best while under label_cost."""
+    keep = np.ones(cost.shape[1], bool)
+    while keep.sum() > 1:
+        idx = np.flatnonzero(keep)
+        c = cost[:, idx]
+        best = c.argmin(axis=1)
+        used = np.bincount(best, minlength=len(idx)) > 0
+        used[0] = True
+        keep[idx[~used]] = False
+        if keep.sum() == 1:
+            break
+        c = c[:, used]
+        best = c.argmin(axis=1)
+        order = np.partition(c, 1, axis=1)
+        saving = np.bincount(best, order[:, 1] - order[:, 0], minlength=c.shape[1])[1:]
+        if saving.min() >= label_cost:
+            break
+        keep[idx[used][saving.argmin() + 1]] = False
+    return keep
+
+
+METHODS = {"none": no_split, "ransac": ransac, "pearl": pearl}
 
 
 def split_clusters(pts, cls, seg, method, tols, min_points, gap, seed=0):

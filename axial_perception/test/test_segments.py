@@ -33,6 +33,13 @@ def test_straight_is_one_line(method):
     assert set(split(method, pts)) == {1}
 
 
+@pytest.mark.parametrize("method", METHODS)
+def test_thick_half_cylinder_is_one_line(method):
+    z, a = np.meshgrid(np.arange(0, 3, 0.05), np.linspace(0, np.pi, 8))
+    pts = np.column_stack([0.2 * np.cos(a.ravel()), 0.2 * np.sin(a.ravel()), z.ravel()])
+    assert set(split(method, pts, tol=0.3)) == {1}
+
+
 @pytest.mark.parametrize("method", SPLITTERS)
 def test_l_splits_at_corner(method):
     pts, truth = polyline([(0, 0, 0), (2, 0, 0), (2, 0, 1.5)])
