@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -5,11 +7,12 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from sensor_msgs_py.point_cloud2 import read_points_numpy
-from tf2_ros import Buffer, TransformException, TransformListener
+from tf2_ros import Buffer, TransformListener
 
 from axial_perception.core.camera import project, quat_to_matrix, transform
 from axial_perception.core.clusters import label_points
 from axial_perception.core.masks import decode_gz_instance
+from axial_perception.core.scan_buffer import ScanBuffer
 
 PALETTE = np.array([
     [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200], [245, 130, 48], [145, 30, 180],
@@ -30,6 +33,8 @@ class MaskProjector(Node):
             "camera_info_topic": "camera_info",
             "image_topic": "image_raw",
             "camera_frame": "",
+            "odom_frame": "odom",
+            "n_scans": 5,
             "depth_min": 0.1,
             "depth_max": 30.0,
             "axial_classes": [4, 6, 8],
@@ -43,7 +48,9 @@ class MaskProjector(Node):
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
         self.K = None
-        self.cloud = None
+        self.scans = ScanBuffer(self.p["n_scans"])
+        self.pending_scans = deque(maxlen=20)
+        self.pending_labels = deque(maxlen=10)
         self.image = None
         self.last_stamp = None
 
@@ -59,29 +66,50 @@ class MaskProjector(Node):
         self.K = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
 
     def on_cloud(self, msg):
-        self.cloud = msg
+        self.pending_scans.append(msg)
+        self.flush()
 
     def on_image(self, msg):
         self.image = msg
 
     def on_labels(self, msg):
-        if self.K is None or self.cloud is None:
-            return
         stamp = Time.from_msg(msg.header.stamp)
-        if self.last_stamp is not None and (stamp - self.last_stamp).nanoseconds < 1e9 / self.p["max_rate_hz"]:
-            return
-        self.last_stamp = stamp
+        if self.last_stamp is None or (stamp - self.last_stamp).nanoseconds >= 1e9 / self.p["max_rate_hz"]:
+            self.last_stamp = stamp
+            if len(self.pending_labels) == self.pending_labels.maxlen:
+                self.get_logger().warn(f"no TF for {self.pending_labels.maxlen} images in a row", throttle_duration_sec=5.0)
+            self.pending_labels.append(msg)
+        self.flush()
 
-        frame = self.p["camera_frame"] or msg.header.frame_id
-        try:
-            tf = self.tf.lookup_transform(frame, self.cloud.header.frame_id, Time())
-        except TransformException as e:
-            self.get_logger().warn(f"no TF {frame} <- {self.cloud.header.frame_id}: {e}", throttle_duration_sec=5.0)
-            return
-        q, t = tf.transform.rotation, tf.transform.translation
-        xyz = read_points_numpy(self.cloud, field_names=("x", "y", "z"), skip_nans=True).astype(np.float64)
-        pts = transform(xyz, quat_to_matrix((q.x, q.y, q.z, q.w)), (t.x, t.y, t.z))
+    def flush(self):
+        self.flush_scans()
+        self.flush_labels()
 
+    def flush_scans(self):
+        while self.pending_scans:
+            msg = self.pending_scans[0]
+            tf = self.lookup(self.p["odom_frame"], msg.header.frame_id, msg.header.stamp)
+            if tf is None:
+                return
+            self.pending_scans.popleft()
+            xyz = read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True).astype(np.float64)
+            self.scans.add(transform(xyz, *tf))
+
+    def flush_labels(self):
+        if self.K is None or len(self.scans) == 0:
+            return
+        for i in reversed(range(len(self.pending_labels))):
+            msg = self.pending_labels[i]
+            frame = self.p["camera_frame"] or msg.header.frame_id
+            tf = self.lookup(frame, self.p["odom_frame"], msg.header.stamp)
+            if tf is not None:
+                for _ in range(i + 1):
+                    self.pending_labels.popleft()
+                self.process(msg, frame, tf)
+                return
+
+    def process(self, msg, frame, tf):
+        pts = transform(self.scans.points(), *tf)
         class_img, mask_img = decode_gz_instance(msg.data, msg.height, msg.width)
         u, v, idx = project(pts, self.K, msg.width, msg.height, self.p["depth_min"], self.p["depth_max"])
         kept, cls, seg = label_points(u, v, idx, class_img, mask_img, self.p["axial_classes"], self.p["min_points"])
@@ -89,6 +117,15 @@ class MaskProjector(Node):
         self.publish_clusters(msg.header.stamp, frame, pts[kept], cls, seg)
         if self.pub_overlay.get_subscription_count() > 0 and self.image is not None:
             self.publish_overlay(u, v, idx, kept, seg)
+
+    def lookup(self, target, source, stamp):
+        # odometry TF arrives after the sensor data it is stamped with, so wait without blocking
+        stamp = Time.from_msg(stamp)
+        if not self.tf.can_transform(target, source, stamp):
+            return None
+        tf = self.tf.lookup_transform(target, source, stamp)
+        q, t = tf.transform.rotation, tf.transform.translation
+        return quat_to_matrix((q.x, q.y, q.z, q.w)), (t.x, t.y, t.z)
 
     def publish_clusters(self, stamp, frame, xyz, cls, seg):
         arr = np.empty(len(xyz), CLUSTER_DTYPE)
