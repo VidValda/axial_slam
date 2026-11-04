@@ -38,7 +38,9 @@ Parameters, with defaults:
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |
 
 ```bash
-ros2 launch axial_perception mask_projection.launch.py params_file:=<yaml> [rviz_config:=<rviz>] [use_sim_time:=true]
+ros2 launch axial_perception mask_projection.launch.py params_file:=<yaml> [rviz:=true fixed_frame:=<frame>] [use_sim_time:=true]
 ```
+
+`rviz:=true` opens `rviz/mask_projection.rviz` (clusters, labels and overlay) with `fixed_frame` (default `odom`) as the fixed frame.
 
 The node logs the input and kept point counts and the processing time every 5 s.
