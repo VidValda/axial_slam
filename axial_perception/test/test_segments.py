@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from axial_perception.core.segments import METHODS, gap_split, split_clusters
+from axial_perception.core.segments import METHODS, gap_split, merge_lines, split_clusters
 
 SPLITTERS = [m for m in METHODS if m != "none"]
 
@@ -71,6 +71,15 @@ def test_gap_split_cuts_collinear_pieces():
     pts = np.array([[x, 0, 0] for x in (0, 0.1, 0.2, 2, 2.1, 2.2)], float)
     np.testing.assert_array_equal(gap_split(pts, np.ones(6, int), 0.5, 3), [1, 1, 1, 2, 2, 2])
     np.testing.assert_array_equal(gap_split(pts, np.ones(6, int), 0, 3), np.ones(6))
+
+
+def test_merge_lines_joins_parallel_but_not_perpendicular():
+    x = np.arange(0, 2, 0.1)
+    near = np.r_[np.column_stack([x, 0 * x, 0 * x]), np.column_stack([x, 0 * x + 0.1, 0 * x])]
+    cross = np.r_[np.column_stack([x, 0 * x, 0 * x]), np.column_stack([0 * x, x, 0 * x])]
+    labels = np.repeat([1, 2], len(x))
+    assert set(merge_lines(near, labels, 0.3)) == {1}
+    assert set(merge_lines(cross, labels, 0.3)) == {1, 2}
 
 
 def test_split_clusters_numbers_lines_per_frame():

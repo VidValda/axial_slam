@@ -31,6 +31,27 @@ def gap_split(pts, labels, gap, min_points):
     return out
 
 
+def merge_lines(pts, labels, tol, share=0.95):
+    """Greedily merges two lines while one line fits at least share of their points within tol."""
+    labels = labels.copy()
+    while True:
+        ids = np.unique(labels[labels > 0])
+        best, pair = share, None
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                sel = (labels == a) | (labels == b)
+                fit = (line_distance(pts[sel], *fit_line(pts[sel])) < tol).mean()
+                if fit >= best:
+                    best, pair = fit, (a, b)
+        if pair is None:
+            return labels
+        labels[labels == pair[1]] = pair[0]
+
+
+def finish(pts, labels, tol, min_points, gap):
+    return gap_split(pts, merge_lines(pts, labels, tol), gap, min_points)
+
+
 def knn(pts, k):
     sq = (pts * pts).sum(1)
     d = sq[:, None] + sq[None] - 2 * pts @ pts.T
@@ -73,7 +94,7 @@ def ransac(pts, tol, min_points, gap, rng, iters=100):
             break
         labels[free[inl]] = labels.max() + 1
         free = free[~inl]
-    return gap_split(pts, labels, gap, min_points)
+    return finish(pts, labels, tol, min_points, gap)
 
 
 def pearl(pts, tol, min_points, gap, rng, proposals=30, k=6, smooth=0.3, label_cost=5.0, deadzone=0.7, sweeps=10):
@@ -106,7 +127,7 @@ def pearl(pts, tol, min_points, gap, rng, proposals=30, k=6, smooth=0.3, label_c
         if np.array_equal(new, labels):
             break
         labels = new
-    return gap_split(pts, labels, gap, min_points)
+    return finish(pts, labels, tol, min_points, gap)
 
 
 def prune(cost, label_cost):
@@ -131,7 +152,142 @@ def prune(cost, label_cost):
     return keep
 
 
-METHODS = {"none": no_split, "ransac": ransac, "pearl": pearl}
+def jlinkage(pts, tol, min_points, gap, rng, proposals=100, local=10):
+    """J-Linkage: agglomerative merging of points by Jaccard distance of their preference sets."""
+    n = len(pts)
+    if n < max(min_points, 3):
+        return np.zeros(n, int)
+    nbr = knn(pts, min(local, n - 1))
+    i = rng.integers(n, size=proposals)
+    d = pts[nbr[i, rng.integers(nbr.shape[1], size=proposals)]] - pts[i]
+    norm = np.linalg.norm(d, axis=1)
+    ok = norm > 1e-6
+    sets = (dist2(pts, pts[i[ok]], d[ok] / norm[ok, None]) < tol * tol).T.astype(float)
+    size = sets.sum(1)
+    inter = sets @ sets.T
+    jac = 1 - inter / np.maximum(size[:, None] + size[None] - inter, 1)
+    np.fill_diagonal(jac, np.inf)
+    owner = np.arange(n)
+    alive = np.ones(n, bool)
+    rmin, rarg = jac.min(1), jac.argmin(1)
+    while True:
+        a = np.argmin(rmin)
+        b = rarg[a]
+        if rmin[a] >= 1:
+            break
+        sets[a] *= sets[b]
+        owner[owner == b] = a
+        alive[b] = False
+        jac[b], jac[:, b], rmin[b] = np.inf, np.inf, np.inf
+        size[a] = sets[a].sum()
+        inter = sets @ sets[a]
+        row = np.where(alive, 1 - inter / np.maximum(size + size[a] - inter, 1), np.inf)
+        row[a] = np.inf
+        jac[a], jac[:, a] = row, row
+        stale = alive & ((rarg == a) | (rarg == b))
+        stale[a] = True
+        rmin[stale], rarg[stale] = jac[stale].min(1), jac[stale].argmin(1)
+        better = alive & (jac[:, a] < rmin)
+        rmin[better], rarg[better] = jac[better, a], a
+    _, labels, counts = np.unique(owner, return_inverse=True, return_counts=True)
+    labels = np.where(counts[labels] >= min_points, labels + 1, 0)
+    return finish(pts, labels, tol, min_points, gap)
+
+
+def mst(pts):
+    """Prim's minimum spanning tree: parent and edge length per point, and the order points joined the tree."""
+    n = len(pts)
+    parent, w, done = np.zeros(n, int), np.zeros(n), np.zeros(n, bool)
+    dist = np.linalg.norm(pts - pts[0], axis=1)
+    done[0], dist[0] = True, np.inf
+    order = [0]
+    for _ in range(n - 1):
+        j = np.argmin(dist)
+        w[j], done[j] = dist[j], True
+        order.append(j)
+        nd = np.linalg.norm(pts - pts[j], axis=1)
+        upd = (nd < dist) & ~done
+        dist[upd], parent[upd] = nd[upd], j
+        dist[j] = np.inf
+    return parent, w, order
+
+
+def longest_path(nodes, parent, pts):
+    adj = {v: [] for v in nodes}
+    for v in nodes:
+        if parent[v] in adj and parent[v] != v:
+            adj[v].append(parent[v])
+            adj[parent[v]].append(v)
+
+    def farthest(src):
+        dist, prev, stack = {src: 0.0}, {src: -1}, [src]
+        while stack:
+            u = stack.pop()
+            for v in adj[u]:
+                if v not in dist:
+                    dist[v], prev[v] = dist[u] + np.linalg.norm(pts[u] - pts[v]), u
+                    stack.append(v)
+        end = max(dist, key=dist.get)
+        return end, prev
+
+    a, _ = farthest(nodes[0])
+    b, prev = farthest(a)
+    path = [b]
+    while prev[path[-1]] != -1:
+        path.append(prev[path[-1]])
+    return np.array(path)
+
+
+def segmented_lsq(p, penalty):
+    """Optimal split of an ordered point sequence into lines: sum of squared residuals + penalty per line."""
+    m = len(p)
+    s1 = np.vstack([np.zeros(3), np.cumsum(p, axis=0)])
+    s2 = np.concatenate([np.zeros((1, 3, 3)), np.cumsum(p[:, :, None] * p[:, None], axis=0)])
+    i, j = np.triu_indices(m + 1, 1)
+    a, b = s1[j] - s1[i], s2[j] - s2[i]
+    ev = np.linalg.eigvalsh(b - a[:, :, None] * a[:, None] / (j - i)[:, None, None])
+    sse = np.full((m + 1, m + 1), np.inf)
+    sse[i, j] = ev[:, 0] + ev[:, 1]
+    best, arg = np.zeros(m + 1), np.zeros(m + 1, int)
+    for e in range(1, m + 1):
+        v = best[:e] + sse[:e, e] + penalty
+        arg[e] = np.argmin(v)
+        best[e] = v[arg[e]]
+    labels, e, k = np.zeros(m, int), m, 0
+    while e > 0:
+        k += 1
+        labels[arg[e]:e] = k
+        e = arg[e]
+    return labels
+
+
+def mst_dp(pts, tol, min_points, gap, rng, penalty=5.0):
+    """Orders points along the longest MST path and splits the order with segmented least squares."""
+    n = len(pts)
+    if n < max(min_points, 3):
+        return np.zeros(n, int)
+    parent, w, order = mst(pts)
+    comp = np.arange(n)
+    for v in order[1:]:
+        if w[v] <= gap or gap <= 0:
+            comp[v] = comp[parent[v]]
+    labels = np.zeros(n, int)
+    for c in np.unique(comp):
+        nodes = np.flatnonzero(comp == c)
+        if len(nodes) < min_points:
+            continue
+        path = longest_path(list(nodes), parent, pts)
+        seg = segmented_lsq(pts[path], penalty * tol * tol)
+        near = np.argmin(np.linalg.norm(pts[nodes][:, None] - pts[path][None], axis=-1), axis=1)
+        labels[nodes] = seg[near] + labels.max()
+    for k in np.unique(labels[labels > 0]):
+        sel = np.flatnonzero(labels == k)
+        if len(sel) >= 2:
+            labels[sel[line_distance(pts[sel], *fit_line(pts[sel])) > tol]] = 0
+    return finish(pts, labels, tol, min_points, gap)
+
+
+METHODS = {"none": no_split, "ransac": ransac, "pearl": pearl, "jlinkage": jlinkage, "mst_dp": mst_dp}
 
 
 def split_clusters(pts, cls, seg, method, tols, min_points, gap, seed=0):
