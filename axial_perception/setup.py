@@ -22,5 +22,5 @@ setup(
     description="Camera-LiDAR projection of instance masks into point clusters.",
     license="BSD-3-Clause",
     tests_require=["pytest"],
-    entry_points={"console_scripts": []},
+    entry_points={"console_scripts": ["mask_projector = axial_perception.nodes.mask_projector:main"]},
 )
