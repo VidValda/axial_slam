@@ -1,3 +1,4 @@
+import time
 from collections import deque
 
 import numpy as np
@@ -8,6 +9,7 @@ from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from sensor_msgs_py.point_cloud2 import read_points_numpy
 from tf2_ros import Buffer, TransformListener
+from visualization_msgs.msg import Marker, MarkerArray
 
 from axial_perception.core.camera import project, quat_to_matrix, transform
 from axial_perception.core.clusters import label_points
@@ -20,9 +22,13 @@ PALETTE = np.array([
     [70, 240, 240], [240, 50, 230], [210, 245, 60], [250, 190, 212], [0, 128, 128], [170, 110, 40],
 ], np.uint8)
 
-CLUSTER_DTYPE = np.dtype([(n, np.float32) for n in ("x", "y", "z", "class_id", "segment")])
+CLUSTER_DTYPE = np.dtype([(n, np.float32) for n in ("x", "y", "z", "class_id", "segment", "rgb")])
 CLUSTER_FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
                   for i, n in enumerate(CLUSTER_DTYPE.names)]
+
+
+def segment_colours(seg):
+    return PALETTE[(seg - 1) % len(PALETTE)]
 
 
 class MaskProjector(Node):
@@ -41,6 +47,7 @@ class MaskProjector(Node):
             "occlusion_window": 9,
             "occlusion_tol": 0.1,
             "axial_classes": [4, 6, 8],
+            "class_names": ["pipe", "duct", "pillar"],
             "min_points": 5,
             "max_rate_hz": 10.0,
         }
@@ -64,6 +71,10 @@ class MaskProjector(Node):
         self.create_subscription(Image, self.p["labels_topic"], self.on_labels, sensor)
         self.pub_clusters = self.create_publisher(PointCloud2, "/axial/mask_clusters", 5)
         self.pub_overlay = self.create_publisher(Image, "/axial/mask_overlay", 5)
+        self.pub_markers = self.create_publisher(MarkerArray, "/axial/mask_cluster_markers", 5)
+        self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
+        self.stats = []
+        self.stats_since = time.monotonic()
 
     def on_info(self, msg):
         self.K = (msg.k[0], msg.k[4], msg.k[2], msg.k[5])
@@ -112,6 +123,7 @@ class MaskProjector(Node):
                 return
 
     def process(self, msg, frame, tf):
+        start = time.perf_counter()
         pts = transform(self.scans.points(), *tf)
         class_img, mask_img = decode_gz_instance(msg.data, msg.height, msg.width)
         u, v, idx = project(pts, self.K, msg.width, msg.height, self.p["depth_min"], self.p["depth_max"])
@@ -124,6 +136,19 @@ class MaskProjector(Node):
         self.publish_clusters(msg.header.stamp, frame, pts[kept], cls, seg)
         if self.pub_overlay.get_subscription_count() > 0 and self.image is not None:
             self.publish_overlay(u, v, idx, kept, seg)
+        if self.pub_markers.get_subscription_count() > 0:
+            self.publish_markers(msg.header.stamp, frame, pts[kept], cls, seg)
+        self.log_stats(len(pts), len(kept), int(seg.max(initial=0)), time.perf_counter() - start)
+
+    def log_stats(self, n_in, n_kept, n_masks, dt):
+        self.stats.append((n_in, n_kept, n_masks, dt))
+        if time.monotonic() - self.stats_since < 5.0:
+            return
+        s = np.array(self.stats)
+        self.get_logger().info(f"{len(s)} frames: {s[:, 0].mean():.0f} pts in, {s[:, 1].mean():.0f} kept in "
+                               f"{s[:, 2].mean():.1f} masks, {s[:, 3].mean() * 1e3:.1f} ms mean, "
+                               f"{s[:, 3].max() * 1e3:.1f} ms max")
+        self.stats, self.stats_since = [], time.monotonic()
 
     def lookup(self, target, source, stamp):
         # odometry TF arrives after the sensor data it is stamped with, so wait without blocking
@@ -138,6 +163,8 @@ class MaskProjector(Node):
         arr = np.empty(len(xyz), CLUSTER_DTYPE)
         arr["x"], arr["y"], arr["z"] = xyz.T
         arr["class_id"], arr["segment"] = cls, seg
+        rgb = segment_colours(seg).astype(np.uint32)
+        arr["rgb"] = ((rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]).view(np.float32)
         out = PointCloud2(height=1, width=len(arr), fields=CLUSTER_FIELDS, is_bigendian=False,
                           point_step=CLUSTER_DTYPE.itemsize, row_step=CLUSTER_DTYPE.itemsize * len(arr),
                           is_dense=True, data=arr.tobytes())
@@ -151,13 +178,31 @@ class MaskProjector(Node):
             return
         out = np.frombuffer(img.data, np.uint8).reshape(img.height, img.width, 3) // 2
         colour = np.full((len(idx), 3), 160, np.uint8)
-        colour[np.searchsorted(idx, kept)] = PALETTE[(seg - 1) % len(PALETTE)]
+        colour[np.searchsorted(idx, kept)] = segment_colours(seg)
         for du in (0, 1):
             for dv in (0, 1):
                 out[np.minimum(v + dv, img.height - 1), np.minimum(u + du, img.width - 1)] = colour
         msg = Image(height=img.height, width=img.width, encoding="rgb8", step=img.width * 3, data=out.tobytes())
         msg.header = img.header
         self.pub_overlay.publish(msg)
+
+    def publish_markers(self, stamp, frame, xyz, cls, seg):
+        out = MarkerArray(markers=[Marker(action=Marker.DELETEALL)])
+        for k in range(1, int(seg.max(initial=0)) + 1):
+            sel = seg == k
+            p = xyz[sel]
+            # nearest point to the centroid, so the label stays on bent runs
+            c = p[np.argmin(np.linalg.norm(p - p.mean(axis=0), axis=1))]
+            r, g, b = segment_colours(np.array([k]))[0] / 255.0
+            m = Marker(ns="mask_clusters", id=k, type=Marker.TEXT_VIEW_FACING, action=Marker.ADD,
+                       text=f"{self.names.get(int(cls[sel][0]), int(cls[sel][0]))} {k} ({sel.sum()})")
+            m.header.stamp, m.header.frame_id = stamp, frame
+            m.pose.position.x, m.pose.position.y, m.pose.position.z = map(float, c)
+            m.pose.orientation.w = 1.0
+            m.scale.z = 0.2
+            m.color.r, m.color.g, m.color.b, m.color.a = float(r), float(g), float(b), 1.0
+            out.markers.append(m)
+        self.pub_markers.publish(out)
 
 
 def main():
