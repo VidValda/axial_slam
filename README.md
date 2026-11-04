@@ -11,6 +11,9 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
    camera intrinsics. Scans and images wait in short queues until odometry TF covers their stamp.
 3. Points hidden behind a nearer point within `occlusion_window` pixels (by more than `occlusion_tol`) are dropped.
 4. Points on masks of `axial_classes` are kept; masks with fewer than `min_points` hits are dropped.
+5. Each mask is split into straight lines with `split_method` (`core/segments.py`). `ransac` fits lines one after
+   the other within `split_tol` of the class, then cuts each line where its points are more than `split_gap` apart.
+   Lines with fewer than `split_min_points` points are dropped and their points get `line` 0.
 
 The ROS-free maths lives in `axial_perception/core` and is covered by `colcon test`.
 
@@ -20,9 +23,9 @@ The ROS-free maths lives in `axial_perception/core` and is covered by `colcon te
 | `cloud_topic` | `sensor_msgs/PointCloud2` | LiDAR scans |
 | `camera_info_topic` | `sensor_msgs/CameraInfo` | intrinsics of the mask camera |
 | `image_topic` | `sensor_msgs/Image` | rgb8 image, only for the overlay |
-| `/axial/mask_clusters` | `sensor_msgs/PointCloud2` | `x y z class_id segment rgb` in `camera_frame`; `segment` numbers the masks of one frame from 1 |
-| `/axial/mask_overlay` | `sensor_msgs/Image` | projected points on the image, coloured by segment (grey if dropped) |
-| `/axial/mask_cluster_markers` | `visualization_msgs/MarkerArray` | one label per cluster |
+| `/axial/mask_clusters` | `sensor_msgs/PointCloud2` | `x y z class_id segment line rgb` in `camera_frame`; `segment` numbers the masks and `line` the straight lines of one frame from 1 (0 = on no line) |
+| `/axial/mask_overlay` | `sensor_msgs/Image` | projected points on the image, coloured by line (grey if dropped) |
+| `/axial/mask_cluster_markers` | `visualization_msgs/MarkerArray` | one label per line |
 
 Parameters, with defaults:
 
@@ -35,6 +38,9 @@ Parameters, with defaults:
 | `occlusion_window`, `occlusion_tol` | 9, 0.1 | z-buffer window in px (0 turns it off) and tolerance in m |
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
 | `min_points` | 5 | smallest cluster |
+| `split_method` | `ransac` | `none`, `ransac` (see `METHODS` in `core/segments.py`) |
+| `split_tol` | `[0.1, 0.3, 0.3]` | point-to-line tolerance in m per class of `axial_classes` |
+| `split_min_points`, `split_gap` | 5, 0.5 | smallest line, and the gap in m that cuts a line (0 turns it off) |
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |
 
 ```bash
@@ -43,4 +49,4 @@ ros2 launch axial_perception mask_projection.launch.py params_file:=<yaml> [rviz
 
 `rviz:=true` opens `rviz/mask_projection.rviz` (clusters, labels and overlay) with `fixed_frame` (default `odom`) as the fixed frame.
 
-The node logs the input and kept point counts and the processing time every 5 s.
+The node logs the input and kept point counts, masks, lines and the split and processing times every 5 s.
