@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from axial_perception.core.segments import METHODS, gap_split, merge_lines, split_clusters
+from axial_perception.core.segments import METHODS, drop_short, gap_split, merge_lines, split_clusters
 
 SPLITTERS = [m for m in METHODS if m != "none"]
 
@@ -82,12 +82,17 @@ def test_merge_lines_joins_parallel_but_not_perpendicular():
     assert set(merge_lines(cross, labels, 0.3)) == {1, 2}
 
 
+def test_drop_short_unassigns_and_renumbers():
+    pts = np.array([[x, 0, 0] for x in (0, 0.1, 0.2)] + [[5, y, 0] for y in (0, 0.5, 1.0)], float)
+    np.testing.assert_array_equal(drop_short(pts, np.array([1, 1, 1, 2, 2, 2]), 0.5), [0, 0, 0, 1, 1, 1])
+
+
 def test_split_clusters_numbers_lines_per_frame():
     a, _ = polyline([(0, 0, 0), (2, 0, 0), (2, 0, 1.5)])
     b, _ = polyline([(0, 1, 0), (0, 1, 2)])
     pts = np.concatenate([a, b])
     seg = np.r_[np.ones(len(a), int), np.full(len(b), 2)]
     cls = np.r_[np.full(len(a), 4), np.full(len(b), 8)]
-    line = split_clusters(pts, cls, seg, "ransac", {4: 0.05, 8: 0.1}, 5, 0.5)
+    line = split_clusters(pts, cls, seg, "ransac", {4: 0.05, 8: 0.1}, 5, {4: 0.5, 8: 0.5})
     assert set(line[seg == 1]) == {1, 2}
     assert set(line[seg == 2]) == {3}

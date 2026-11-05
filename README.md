@@ -14,7 +14,8 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
 5. Each mask is split into straight lines with `split_method` (`core/segments.py`). `ransac` fits lines one after
    the other within `split_tol` of the class. For every method, two lines are merged when one line fits 95% of their
    points within `split_tol`, then each line is cut where its points are more than `split_gap` apart. Lines with
-   fewer than `split_min_points` points are dropped and their points get `line` 0.
+   fewer than `split_min_points` points or shorter than `split_min_length` are dropped and their points get `line` 0.
+   Short lines give poor directions: their points cover only one or two scan lines across the pipe.
 
    The other methods are there to benchmark `ransac` against:
    - `pearl`: PEARL-style; RANSAC and random proposals, then points are re-assigned by minimising distance cost +
@@ -47,8 +48,9 @@ Parameters, with defaults:
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
 | `min_points` | 5 | smallest cluster |
 | `split_method` | `ransac` | `none`, `ransac`, `pearl`, `jlinkage`, `mst_dp` (`METHODS` in `core/segments.py`) |
-| `split_tol` | `[0.1, 0.3, 0.3]` | point-to-line tolerance in m per class of `axial_classes` |
-| `split_min_points`, `split_gap` | 5, 0.5 | smallest line, and the gap in m that cuts a line (0 turns it off) |
+| `split_tol` | `[0.07, 0.25, 0.3]` | point-to-line tolerance in m per class of `axial_classes` |
+| `split_gap` | `[0.5, 1.5, 1.0]` | gap in m along a line that cuts it, per class (0 turns it off) |
+| `split_min_points`, `split_min_length` | 5, 0.5 | smallest line in points and in m |
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |
 
 ```bash

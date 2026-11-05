@@ -53,9 +53,10 @@ class MaskProjector(Node):
             "class_names": ["pipe", "duct", "pillar"],
             "min_points": 5,
             "split_method": "ransac",
-            "split_tol": [0.1, 0.3, 0.3],
+            "split_tol": [0.07, 0.25, 0.3],
+            "split_gap": [0.5, 1.5, 1.0],
             "split_min_points": 5,
-            "split_gap": 0.5,
+            "split_min_length": 0.5,
             "max_rate_hz": 10.0,
         }
         for name, default in p.items():
@@ -81,6 +82,7 @@ class MaskProjector(Node):
         self.pub_markers = self.create_publisher(MarkerArray, "/axial/mask_cluster_markers", 5)
         self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
         self.tols = dict(zip(self.p["axial_classes"], self.p["split_tol"]))
+        self.gaps = dict(zip(self.p["axial_classes"], self.p["split_gap"]))
         self.stats = []
         self.stats_since = time.monotonic()
 
@@ -142,7 +144,7 @@ class MaskProjector(Node):
         kept, cls, seg = label_points(u, v, idx, class_img, mask_img, self.p["axial_classes"], self.p["min_points"])
         split_start = time.perf_counter()
         line = split_clusters(pts[kept], cls, seg, self.p["split_method"], self.tols,
-                              self.p["split_min_points"], self.p["split_gap"])
+                              self.p["split_min_points"], self.gaps, self.p["split_min_length"])
         split_dt = time.perf_counter() - split_start
 
         self.publish_clusters(msg.header.stamp, frame, pts[kept], cls, seg, line)

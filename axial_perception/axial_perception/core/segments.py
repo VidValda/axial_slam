@@ -77,7 +77,7 @@ def no_split(pts, tol, min_points, gap, rng):
     return np.full(len(pts), int(len(pts) >= min_points))
 
 
-def ransac(pts, tol, min_points, gap, rng, iters=100):
+def ransac(pts, tol, min_points, gap, rng, iters=50):
     labels = np.zeros(len(pts), int)
     free = np.arange(len(pts))
     while len(free) >= max(min_points, 2):
@@ -290,12 +290,28 @@ def mst_dp(pts, tol, min_points, gap, rng, penalty=5.0):
 METHODS = {"none": no_split, "ransac": ransac, "pearl": pearl, "jlinkage": jlinkage, "mst_dp": mst_dp}
 
 
-def split_clusters(pts, cls, seg, method, tols, min_points, gap, seed=0):
-    """Splits every mask (seg) into straight lines; returns per-point line ids 1..M (0 = unassigned)."""
+def drop_short(pts, labels, min_length):
+    """Unassigns lines whose points span less than min_length along the line, and renumbers the rest 1..L."""
+    out = np.zeros(len(pts), int)
+    for k in np.unique(labels[labels > 0]):
+        sel = labels == k
+        c, d = fit_line(pts[sel])
+        t = (pts[sel] - c) @ d
+        if t.max() - t.min() >= min_length:
+            out[sel] = out.max() + 1
+    return out
+
+
+def split_clusters(pts, cls, seg, method, tols, min_points, gaps, min_length=0.0, seed=0):
+    """Splits every mask (seg) into straight lines with the tolerance and gap of its class (tols, gaps: class -> m).
+
+    Returns per-point line ids 1..M (0 = unassigned).
+    """
     rng = np.random.default_rng(seed)
     line = np.zeros(len(pts), int)
     for k in np.unique(seg):
         sel = np.flatnonzero(seg == k)
-        lab = METHODS[method](pts[sel], tols[int(cls[sel[0]])], min_points, gap, rng)
+        c = int(cls[sel[0]])
+        lab = METHODS[method](pts[sel], tols[c], min_points, gaps[c], rng)
         line[sel[lab > 0]] = lab[lab > 0] + line.max()
-    return line
+    return drop_short(pts, line, min_length) if min_length > 0 else line
