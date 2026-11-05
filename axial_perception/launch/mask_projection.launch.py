@@ -18,8 +18,10 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="false"),
         DeclareLaunchArgument("fixed_frame", default_value="odom"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
+        # the matrices are small: BLAS threads only spin and starve the other nodes
         Node(package="axial_perception", executable="mask_projector", output="screen",
-             parameters=[LaunchConfiguration("params_file"), sim_time]),
+             parameters=[LaunchConfiguration("params_file"), sim_time],
+             additional_env={"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1"}),
         Node(package="rviz2", executable="rviz2", parameters=[sim_time],
              arguments=["-d", rviz_config, "-f", LaunchConfiguration("fixed_frame")],
              condition=IfCondition(LaunchConfiguration("rviz"))),
