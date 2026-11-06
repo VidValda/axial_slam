@@ -1,4 +1,7 @@
 import numpy as np
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial import cKDTree
 
 
 def _window_min(img, window):
@@ -13,3 +16,27 @@ def front_mask(u, v, z, width, height, window, tol):
     zbuf = np.full((height, width), np.inf)
     np.minimum.at(zbuf, (v, u), z)
     return z <= _window_min(zbuf, window)[v, u] + tol
+
+
+def surface_mask(u, v, xyz, mask_img, link, radius, behind, min_points=10):
+    """True for the points on their mask's own surface. Per mask, points are grouped by linking them in 3D within link
+    m. The largest group is the surface; another group of min_points or more is kept unless its points lie more than
+    behind m (median) behind the surface points within radius px in the image: background seen through the mask."""
+    keep = np.zeros(len(u), bool)
+    m = mask_img[v, u]
+    for s in np.unique(m):
+        i = np.flatnonzero(m == s)
+        a, b = cKDTree(xyz[i]).query_pairs(link, output_type="ndarray").T
+        lab = connected_components(coo_matrix((np.ones(len(a)), (a, b)), shape=(len(i), len(i))), directed=False)[1]
+        size = np.bincount(lab)
+        top = lab == size.argmax()
+        uv = np.c_[u[i], v[i]]
+        d, k = cKDTree(uv[top]).query(uv, distance_upper_bound=radius)
+        near = np.isfinite(d)
+        dz = xyz[i, 2][near] - xyz[i[top], 2][k[near]]
+        good = size == size.max()
+        for c in np.flatnonzero(size >= min_points):
+            x = dz[lab[near] == c]
+            good[c] |= not len(x) or np.median(x) < behind
+        keep[i[good[lab]]] = True
+    return keep

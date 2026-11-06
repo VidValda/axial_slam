@@ -9,7 +9,12 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
 1. Each scan is moved into `odom_frame` with TF at its stamp, and the last `n_scans` are kept.
 2. For each mask image, the buffer is moved into `camera_frame` with TF at the image stamp and projected with the
    camera intrinsics. Scans and images wait in short queues until odometry TF covers their stamp.
-3. Points hidden behind a nearer point within `occlusion_window` pixels (by more than `occlusion_tol`) are dropped.
+3. Hidden points are dropped with `occlusion_method`:
+   - `zbuffer`: points more than `occlusion_tol` behind the nearest point within `occlusion_window` pixels.
+   - `mask`: per mask, points are grouped by linking them in 3D within `occlusion_link`. The largest group is the
+     object; other groups are dropped when they lie more than `occlusion_behind` behind it within `occlusion_radius`
+     pixels (background seen through the mask). Keeps more of slanted and receding pipes than `zbuffer`.
+   - `none`.
 4. Points on masks of `axial_classes` are kept; masks with fewer than `min_points` hits are dropped.
 5. Each mask is split into straight lines with `split_method` (`core/segments.py`). `ransac` fits lines one after
    the other within `split_tol` of the class. For every method, two lines are merged when one line fits 95% of their
@@ -44,7 +49,9 @@ Parameters, with defaults:
 | `odom_frame` | `odom` | frame the scans are accumulated in |
 | `n_scans` | 5 | scans kept |
 | `depth_min`, `depth_max` | 0.1, 30.0 | depth range in m |
-| `occlusion_window`, `occlusion_tol` | 9, 0.1 | z-buffer window in px (0 turns it off) and tolerance in m |
+| `occlusion_method` | `zbuffer` | `zbuffer`, `mask` or `none` |
+| `occlusion_window`, `occlusion_tol` | 9, 0.1 | `zbuffer`: window in px and tolerance in m |
+| `occlusion_link`, `occlusion_radius`, `occlusion_behind` | 0.1, 15, 0.3 | `mask`: 3D link in m, image radius in px, depth behind the object in m |
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
 | `min_points` | 5 | smallest cluster |
 | `split_method` | `ransac` | `none`, `ransac`, `pearl`, `jlinkage`, `mst_dp` (`METHODS` in `core/segments.py`) |
