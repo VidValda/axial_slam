@@ -31,6 +31,13 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
 
 The ROS-free maths lives in `axial_perception/core` and is covered by `colcon test`.
 
+`split_method: none` turns the splitting off: every mask is one line.
+
+`axial_perception/benchmarks` scores the node against a ground-truth world file (`--gt`) with the params of a
+params file (`-c`): `mask_clusters_gt.py` (points off their surface), `line_segments_gt.py` (split methods, live or
+from a saved `.npz`), `record_raw.py` and `turn_dataset.py` (raw frames of pipe and duct turns, scored offline).
+Datasets are passed with `-d` and are kept outside the repo.
+
 | Topic | Type | |
 |---|---|---|
 | `labels_topic` | `sensor_msgs/Image` | rgb8 instance map, class in B and instance id in `(G << 8) \| R` (Gazebo instance camera) |
