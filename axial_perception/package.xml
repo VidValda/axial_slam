@@ -7,6 +7,7 @@
   <maintainer email="valdajosevid@gmail.com">VidValda</maintainer>
   <license>BSD-3-Clause</license>
 
+  <exec_depend>dps_slam_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

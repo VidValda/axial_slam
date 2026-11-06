@@ -3,6 +3,7 @@ from collections import deque
 
 import numpy as np
 import rclpy
+from dps_slam_msgs.msg import DetectionWithID, DetectionWithIDArray, Geometry
 from geometry_msgs.msg import Point
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -18,7 +19,7 @@ from axial_perception.core.landmarks import LineLandmarks
 from axial_perception.core.masks import decode_gz_instance
 from axial_perception.core.occlusion import front_mask, surface_mask
 from axial_perception.core.scan_buffer import ScanBuffer
-from axial_perception.core.segments import split_clusters
+from axial_perception.core.segments import fit_line, split_clusters
 
 PALETTE = np.array([
     [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200], [245, 130, 48], [145, 30, 180],
@@ -83,6 +84,10 @@ class MaskProjector(Node):
             "map_min_elongation": 3.0,
             "map_min_neighbours": 8,
             "map_rate_hz": 1.0,
+            "detection_frame": "",
+            "detection_frame_id": "",
+            "line_dir_std": 0.05,
+            "line_offset_std": 0.1,
         }
         for name, default in p.items():
             self.declare_parameter(name, default)
@@ -110,6 +115,8 @@ class MaskProjector(Node):
         self.landmarks = LineLandmarks(self.p["map_spawn_threshold"], self.p["map_min_separation"],
                                        self.p["map_max_angle"], self.p["map_voxel"], self.p["map_min_elongation"])
         self.create_timer(1.0 / self.p["map_rate_hz"], self.publish_map)
+        self.pub_detections = self.create_publisher(DetectionWithIDArray, "/axial/line_detections", 10)
+        self.line_cov = np.diag(np.repeat([self.p["line_dir_std"] ** 2, self.p["line_offset_std"] ** 2], 2))
         self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
         self.tols = dict(zip(self.p["axial_classes"], self.p["split_tol"]))
         self.gaps = dict(zip(self.p["axial_classes"], self.p["split_gap"]))
@@ -183,7 +190,9 @@ class MaskProjector(Node):
         line = split_clusters(pts[kept], cls, seg, self.p["split_method"], self.tols,
                               self.p["split_min_points"], self.gaps, self.p["split_min_length"])
         split_dt = time.perf_counter() - split_start
-        self.landmarks.update(odom[kept], cls, line)
+        ids = self.landmarks.update(odom[kept], cls, line)
+        if ids:
+            self.publish_detections(msg.header.stamp, frame, pts[kept], cls, line, ids)
 
         self.publish_clusters(msg.header.stamp, frame, pts[kept], cls, seg, line)
         if self.pub_overlay.get_subscription_count() > 0 and self.image is not None:
@@ -192,6 +201,27 @@ class MaskProjector(Node):
             self.publish_markers(msg.header.stamp, frame, pts[kept], cls, line)
         self.log_stats(len(pts), len(kept), int(seg.max(initial=0)), int(line.max(initial=0)),
                        split_dt, time.perf_counter() - start)
+
+    def publish_detections(self, stamp, frame, xyz, cls, line, ids):
+        target = self.p["detection_frame"] or frame
+        tf = (np.eye(3), np.zeros(3)) if target == frame else self.lookup(target, frame, stamp)
+        if tf is None:
+            self.get_logger().warn(f"no TF {frame} -> {target}, line detections dropped", throttle_duration_sec=5.0)
+            return
+        out = DetectionWithIDArray()
+        out.header.stamp, out.header.frame_id = stamp, self.p["detection_frame_id"] or target
+        for k, gid in ids.items():
+            sel = line == k
+            c, d = fit_line(transform(xyz[sel], *tf))
+            name = self.names.get(int(cls[sel][0]), str(int(cls[sel][0])))
+            det = DetectionWithID(id=f"{name}_{gid}", label=name)
+            det.geometry.type = Geometry.LINE3D
+            det.geometry.line3d.point = Point(x=float(c[0]), y=float(c[1]), z=float(c[2]))
+            det.geometry.line3d.direction.x, det.geometry.line3d.direction.y, det.geometry.line3d.direction.z = \
+                (float(v) for v in d)
+            det.geometry.line3d.covariance = self.line_cov.ravel().tolist()
+            out.detections.append(det)
+        self.pub_detections.publish(out)
 
     def publish_map(self):
         stamp, frame = self.get_clock().now().to_msg(), self.p["odom_frame"]
