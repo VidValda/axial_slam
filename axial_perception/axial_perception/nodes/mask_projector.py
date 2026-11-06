@@ -78,9 +78,12 @@ class MaskProjector(Node):
             "max_rate_hz": 10.0,
             "map_spawn_threshold": 0.5,
             "map_min_separation": 1.0,
-            "map_alpha": 0.2,
             "map_max_angle": 0.35,
-            "map_voxel": 0.05,
+            "map_voxel": 0.03,
+            "map_min_length": 1.0,
+            "map_min_elongation": 3.0,
+            "map_max_tilt": [1.571, 1.571, 0.35],
+            "map_min_neighbours": 8,
             "map_rate_hz": 1.0,
         }
         for name, default in p.items():
@@ -106,8 +109,10 @@ class MaskProjector(Node):
         self.pub_markers = self.create_publisher(MarkerArray, "/axial/mask_cluster_markers", 5)
         self.pub_map = self.create_publisher(PointCloud2, "/axial/landmark_map", 1)
         self.pub_map_markers = self.create_publisher(MarkerArray, "/axial/landmark_markers", 1)
-        self.landmarks = LineLandmarks(self.p["map_spawn_threshold"], self.p["map_min_separation"], self.p["map_alpha"],
-                                       self.p["map_max_angle"], self.p["map_voxel"])
+        self.landmarks = LineLandmarks(self.p["map_spawn_threshold"], self.p["map_min_separation"],
+                                       self.p["map_max_angle"], self.p["map_voxel"], self.p["map_min_length"],
+                                       self.p["map_min_elongation"],
+                                       dict(zip(self.p["axial_classes"], self.p["map_max_tilt"])))
         self.create_timer(1.0 / self.p["map_rate_hz"], self.publish_map)
         self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
         self.tols = dict(zip(self.p["axial_classes"], self.p["split_tol"]))
@@ -197,13 +202,14 @@ class MaskProjector(Node):
         lms = self.landmarks.landmarks
         if not lms:
             return
+        dense = {gid: self.landmarks.dense_points(gid, self.p["map_min_neighbours"]) for gid in lms}
         if self.pub_map.get_subscription_count() > 0:
             parts = []
             for gid, lm in lms.items():
-                arr = np.empty(len(lm.points), MAP_DTYPE)
-                arr["x"], arr["y"], arr["z"] = lm.points.T
+                arr = np.empty(len(dense[gid]), MAP_DTYPE)
+                arr["x"], arr["y"], arr["z"] = dense[gid].T
                 arr["class_id"], arr["landmark"] = lm.class_id, gid
-                arr["rgb"] = pack_rgb(line_colours(np.full(len(lm.points), gid)))
+                arr["rgb"] = pack_rgb(line_colours(np.full(len(arr), gid)))
                 parts.append(arr)
             arr = np.concatenate(parts)
             out = PointCloud2(height=1, width=len(arr), fields=MAP_FIELDS, is_bigendian=False,
@@ -214,9 +220,9 @@ class MaskProjector(Node):
         if self.pub_map_markers.get_subscription_count() > 0:
             out = MarkerArray(markers=[Marker(action=Marker.DELETEALL)])
             for gid, lm in lms.items():
-                if len(lm.points) == 0:
+                if len(dense[gid]) == 0:
                     continue
-                t = (lm.points - lm.point) @ lm.direction
+                t = (dense[gid] - lm.point) @ lm.direction
                 ends = [lm.point + t.min() * lm.direction, lm.point + t.max() * lm.direction]
                 r, g, b = line_colours(np.array([gid]))[0] / 255.0
                 axis = Marker(ns="landmark_axes", id=gid, type=Marker.LINE_LIST, action=Marker.ADD)
