@@ -73,3 +73,12 @@ def test_set_anchor_reserves_id():
     lm.set_anchor(7, (5.0, 0.0, 0.0), UP, class_id=8)
     assert lm.assign(8, (5.1, 0.0, 1.0), UP) == 7
     assert lm.assign(8, (9.0, 0.0, 1.0), UP) == 8
+
+
+def test_update_maps_lines_of_a_frame():
+    lm = LineLandmarks(0.3)
+    xyz = np.concatenate([pillar(0.0, 0.0), pillar(2.0, 0.0)])
+    line = np.repeat([1, 2], len(xyz) // 2)
+    first = lm.update(xyz, np.full(len(xyz), 8), line)
+    assert lm.update(xyz, np.full(len(xyz), 8), line) == first
+    assert sorted(first.values()) == [1, 2]

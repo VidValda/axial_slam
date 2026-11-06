@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from axial_perception.core.segments import fit_line
+
 
 def canonical(d):
     d = np.asarray(d, float)
@@ -69,6 +71,14 @@ class LineLandmarks:
         if pts is not None:
             lm.points = self.voxelize(np.concatenate([lm.points, pts]))
         return gid
+
+    def update(self, xyz, cls, line):
+        """Assigns every line of one frame (per-point line ids, 0 = none); returns line id -> landmark id."""
+        ids = {}
+        for k in np.unique(line[line > 0]):
+            sel = line == k
+            ids[int(k)] = self.assign(int(cls[sel][0]), *fit_line(xyz[sel]), xyz[sel])
+        return ids
 
     def set_anchor(self, gid, point, direction, class_id=0):
         """Overwrites a line with an authoritative estimate; later ids never reuse gid."""

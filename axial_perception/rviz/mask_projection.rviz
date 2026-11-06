@@ -38,6 +38,26 @@ Visualization Manager:
         Reliability Policy: Reliable
         Depth: 5
       Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Landmark map
+      Enabled: true
+      Topic:
+        Value: /axial/landmark_map
+        Reliability Policy: Reliable
+        Depth: 1
+      Color Transformer: RGB8
+      Style: Points
+      Size (Pixels): 3
+      Decay Time: 0
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Landmark axes
+      Enabled: true
+      Topic:
+        Value: /axial/landmark_markers
+        Reliability Policy: Reliable
+        Depth: 1
+      Value: true
     - Class: rviz_default_plugins/Image
       Name: Overlay
       Enabled: true

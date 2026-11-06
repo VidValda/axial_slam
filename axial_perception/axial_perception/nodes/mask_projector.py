@@ -3,6 +3,7 @@ from collections import deque
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import Point
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -13,6 +14,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from axial_perception.core.camera import project, quat_to_matrix, transform
 from axial_perception.core.clusters import label_points
+from axial_perception.core.landmarks import LineLandmarks
 from axial_perception.core.masks import decode_gz_instance
 from axial_perception.core.occlusion import front_mask, surface_mask
 from axial_perception.core.scan_buffer import ScanBuffer
@@ -24,8 +26,20 @@ PALETTE = np.array([
 ], np.uint8)
 
 CLUSTER_DTYPE = np.dtype([(n, np.float32) for n in ("x", "y", "z", "class_id", "segment", "line", "rgb")])
-CLUSTER_FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
-                  for i, n in enumerate(CLUSTER_DTYPE.names)]
+MAP_DTYPE = np.dtype([(n, np.float32) for n in ("x", "y", "z", "class_id", "landmark", "rgb")])
+
+
+def float_fields(dtype):
+    return [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate(dtype.names)]
+
+
+CLUSTER_FIELDS = float_fields(CLUSTER_DTYPE)
+MAP_FIELDS = float_fields(MAP_DTYPE)
+
+
+def pack_rgb(rgb):
+    rgb = rgb.astype(np.uint32)
+    return ((rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]).view(np.float32)
 
 
 def line_colours(line):
@@ -62,6 +76,12 @@ class MaskProjector(Node):
             "split_min_points": 5,
             "split_min_length": 0.5,
             "max_rate_hz": 10.0,
+            "map_spawn_threshold": 0.5,
+            "map_min_separation": 1.0,
+            "map_alpha": 0.2,
+            "map_max_angle": 0.35,
+            "map_voxel": 0.05,
+            "map_rate_hz": 1.0,
         }
         for name, default in p.items():
             self.declare_parameter(name, default)
@@ -84,6 +104,11 @@ class MaskProjector(Node):
         self.pub_clusters = self.create_publisher(PointCloud2, "/axial/mask_clusters", 5)
         self.pub_overlay = self.create_publisher(Image, "/axial/mask_overlay", 5)
         self.pub_markers = self.create_publisher(MarkerArray, "/axial/mask_cluster_markers", 5)
+        self.pub_map = self.create_publisher(PointCloud2, "/axial/landmark_map", 1)
+        self.pub_map_markers = self.create_publisher(MarkerArray, "/axial/landmark_markers", 1)
+        self.landmarks = LineLandmarks(self.p["map_spawn_threshold"], self.p["map_min_separation"], self.p["map_alpha"],
+                                       self.p["map_max_angle"], self.p["map_voxel"])
+        self.create_timer(1.0 / self.p["map_rate_hz"], self.publish_map)
         self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
         self.tols = dict(zip(self.p["axial_classes"], self.p["split_tol"]))
         self.gaps = dict(zip(self.p["axial_classes"], self.p["split_gap"]))
@@ -138,7 +163,8 @@ class MaskProjector(Node):
 
     def process(self, msg, frame, tf):
         start = time.perf_counter()
-        pts = transform(self.scans.points(), *tf)
+        odom = self.scans.points()
+        pts = transform(odom, *tf)
         class_img, mask_img = decode_gz_instance(msg.data, msg.height, msg.width)
         u, v, idx = project(pts, self.K, msg.width, msg.height, self.p["depth_min"], self.p["depth_max"])
         if self.p["occlusion_method"] == "zbuffer":
@@ -156,6 +182,7 @@ class MaskProjector(Node):
         line = split_clusters(pts[kept], cls, seg, self.p["split_method"], self.tols,
                               self.p["split_min_points"], self.gaps, self.p["split_min_length"])
         split_dt = time.perf_counter() - split_start
+        self.landmarks.update(odom[kept], cls, line)
 
         self.publish_clusters(msg.header.stamp, frame, pts[kept], cls, seg, line)
         if self.pub_overlay.get_subscription_count() > 0 and self.image is not None:
@@ -164,6 +191,48 @@ class MaskProjector(Node):
             self.publish_markers(msg.header.stamp, frame, pts[kept], cls, line)
         self.log_stats(len(pts), len(kept), int(seg.max(initial=0)), int(line.max(initial=0)),
                        split_dt, time.perf_counter() - start)
+
+    def publish_map(self):
+        stamp, frame = self.get_clock().now().to_msg(), self.p["odom_frame"]
+        lms = self.landmarks.landmarks
+        if not lms:
+            return
+        if self.pub_map.get_subscription_count() > 0:
+            parts = []
+            for gid, lm in lms.items():
+                arr = np.empty(len(lm.points), MAP_DTYPE)
+                arr["x"], arr["y"], arr["z"] = lm.points.T
+                arr["class_id"], arr["landmark"] = lm.class_id, gid
+                arr["rgb"] = pack_rgb(line_colours(np.full(len(lm.points), gid)))
+                parts.append(arr)
+            arr = np.concatenate(parts)
+            out = PointCloud2(height=1, width=len(arr), fields=MAP_FIELDS, is_bigendian=False,
+                              point_step=MAP_DTYPE.itemsize, row_step=MAP_DTYPE.itemsize * len(arr),
+                              is_dense=True, data=arr.tobytes())
+            out.header.stamp, out.header.frame_id = stamp, frame
+            self.pub_map.publish(out)
+        if self.pub_map_markers.get_subscription_count() > 0:
+            out = MarkerArray(markers=[Marker(action=Marker.DELETEALL)])
+            for gid, lm in lms.items():
+                if len(lm.points) == 0:
+                    continue
+                t = (lm.points - lm.point) @ lm.direction
+                ends = [lm.point + t.min() * lm.direction, lm.point + t.max() * lm.direction]
+                r, g, b = line_colours(np.array([gid]))[0] / 255.0
+                axis = Marker(ns="landmark_axes", id=gid, type=Marker.LINE_LIST, action=Marker.ADD)
+                axis.points = [Point(x=float(e[0]), y=float(e[1]), z=float(e[2])) for e in ends]
+                axis.scale.x = 0.05
+                label = Marker(ns="landmark_labels", id=gid, type=Marker.TEXT_VIEW_FACING, action=Marker.ADD,
+                               text=f"{self.names.get(lm.class_id, lm.class_id)} {gid} ({lm.hits})")
+                label.pose.position.x, label.pose.position.y, label.pose.position.z = (float(v) for v in ends[1])
+                label.pose.position.z += 0.2
+                label.scale.z = 0.25
+                for m in (axis, label):
+                    m.header.stamp, m.header.frame_id = stamp, frame
+                    m.pose.orientation.w = 1.0
+                    m.color.r, m.color.g, m.color.b, m.color.a = float(r), float(g), float(b), 1.0
+                    out.markers.append(m)
+            self.pub_map_markers.publish(out)
 
     def log_stats(self, *row):
         self.stats.append(row)
@@ -189,8 +258,7 @@ class MaskProjector(Node):
         arr = np.empty(len(xyz), CLUSTER_DTYPE)
         arr["x"], arr["y"], arr["z"] = xyz.T
         arr["class_id"], arr["segment"], arr["line"] = cls, seg, line
-        rgb = line_colours(line).astype(np.uint32)
-        arr["rgb"] = ((rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]).view(np.float32)
+        arr["rgb"] = pack_rgb(line_colours(line))
         out = PointCloud2(height=1, width=len(arr), fields=CLUSTER_FIELDS, is_bigendian=False,
                           point_step=CLUSTER_DTYPE.itemsize, row_step=CLUSTER_DTYPE.itemsize * len(arr),
                           is_dense=True, data=arr.tobytes())
