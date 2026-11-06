@@ -20,8 +20,9 @@ def front_mask(u, v, z, width, height, window, tol):
 
 def surface_mask(u, v, xyz, mask_img, link, radius, behind, min_points=10):
     """True for the points on their mask's own surface. Per mask, points are grouped by linking them in 3D within link
-    m. The largest group is the surface; another group of min_points or more is kept unless its points lie more than
-    behind m (median) behind the surface points within radius px in the image: background seen through the mask."""
+    m. The largest group is the surface. Another group of min_points or more is dropped when its points lie (median)
+    more than behind m behind the surface points within radius px in the image (background seen through the mask), or
+    more than behind m in front of the nearest surface points (seen by the lidar but hidden from the camera)."""
     keep = np.zeros(len(u), bool)
     m = mask_img[v, u]
     for s in np.unique(m):
@@ -31,12 +32,14 @@ def surface_mask(u, v, xyz, mask_img, link, radius, behind, min_points=10):
         size = np.bincount(lab)
         top = lab == size.argmax()
         uv = np.c_[u[i], v[i]]
-        d, k = cKDTree(uv[top]).query(uv, distance_upper_bound=radius)
+        tree = cKDTree(uv[top])
+        d, k = tree.query(uv, distance_upper_bound=radius)
         near = np.isfinite(d)
         dz = xyz[i, 2][near] - xyz[i[top], 2][k[near]]
+        front = xyz[i, 2] - xyz[i[top], 2][tree.query(uv)[1]]
         good = size == size.max()
         for c in np.flatnonzero(size >= min_points):
             x = dz[lab[near] == c]
-            good[c] |= not len(x) or np.median(x) < behind
+            good[c] |= (not len(x) or np.median(x) < behind) and np.median(front[lab == c]) > -behind
         keep[i[good[lab]]] = True
     return keep

@@ -26,17 +26,15 @@ class Landmark:
 
 
 class LineLandmarks:
-    """Stable ids for infinite lines re-observed in one fixed, z-up frame.
+    """Stable ids for infinite lines re-observed in one fixed frame.
 
-    Lines shorter than min_length, less elongated than min_elongation (first over second principal spread) or
-    tilted from z by more than their class's max_tilt are ignored. A sighting matches the nearest same-class line
-    within max_angle by perpendicular distance: below spawn_threshold its points join the landmark and the line is
-    refit to them, below min_anchor_separation it is matched without touching the landmark, otherwise it spawns a new
-    id.
+    Lines less elongated than min_elongation (first over second principal spread) have no reliable direction and are
+    ignored. A sighting matches the nearest same-class line within max_angle by perpendicular distance: below
+    spawn_threshold its points join the landmark and the line is refit to them, below min_anchor_separation it is
+    matched without touching the landmark, otherwise it spawns a new id.
     """
 
-    def __init__(self, spawn_threshold, min_anchor_separation=None, max_angle=0.35, voxel=0.05, min_length=0.0,
-                 min_elongation=0.0, max_tilt=None):
+    def __init__(self, spawn_threshold, min_anchor_separation=None, max_angle=0.35, voxel=0.05, min_elongation=0.0):
         self.spawn_threshold = float(spawn_threshold)
         self.min_anchor_separation = float(spawn_threshold if min_anchor_separation is None
                                            else min_anchor_separation)
@@ -45,20 +43,13 @@ class LineLandmarks:
                              f"spawn_threshold ({self.spawn_threshold})")
         self.cos_max_angle = np.cos(max_angle)
         self.voxel = float(voxel)
-        self.min_length = float(min_length)
         self.min_elongation = float(min_elongation)
-        self.max_tilt = dict(max_tilt or {})
         self.landmarks = {}
         self._next_id = 1
 
-    def accepts(self, class_id, pts, c, d):
-        t = (pts - c) @ d
-        if t.max() - t.min() < self.min_length:
-            return False
+    def accepts(self, pts, c):
         s = np.linalg.svd(pts - c, compute_uv=False)
-        if len(s) < 2 or s[0] < self.min_elongation * s[1]:
-            return False
-        return np.arccos(min(abs(d[2]), 1.0)) <= self.max_tilt.get(class_id, np.pi / 2)
+        return len(s) >= 2 and s[0] >= self.min_elongation * s[1]
 
     def update(self, xyz, cls, line):
         """Assigns every accepted line of one frame (per-point line ids, 0 = none); returns line id -> landmark id."""
@@ -66,7 +57,7 @@ class LineLandmarks:
         for k in np.unique(line[line > 0]):
             sel = line == k
             c, d = fit_line(xyz[sel])
-            if self.accepts(int(cls[sel][0]), xyz[sel], c, d):
+            if self.accepts(xyz[sel], c):
                 ids[int(k)] = self.assign(int(cls[sel][0]), c, d, xyz[sel])
         return ids
 

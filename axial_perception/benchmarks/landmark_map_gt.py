@@ -55,9 +55,7 @@ def main():
     cfg = yaml.safe_load(open(args.config))["mask_projector"]["ros__parameters"]
     p = params(args.config)
     lm = LineLandmarks(cfg.get("map_spawn_threshold", 0.5), cfg.get("map_min_separation", 1.0),
-                       cfg.get("map_max_angle", 0.35), cfg.get("map_voxel", 0.03), cfg.get("map_min_length", 1.0),
-                       cfg.get("map_min_elongation", 3.0),
-                       dict(zip(p["classes"], cfg.get("map_max_tilt", [1.571, 1.571, 0.35]))))
+                       cfg.get("map_max_angle", 0.35), cfg.get("map_voxel", 0.03), cfg.get("map_min_elongation", 3.0))
     centre, radius, height = load_pillars(args.gt)
     frames = lines = 0
     for xyz, cls, line in raw_frames(args.raw, cfg, p) if args.raw else cluster_frames(args.clusters):

@@ -80,9 +80,7 @@ class MaskProjector(Node):
             "map_min_separation": 1.0,
             "map_max_angle": 0.35,
             "map_voxel": 0.03,
-            "map_min_length": 1.0,
             "map_min_elongation": 3.0,
-            "map_max_tilt": [1.571, 1.571, 0.35],
             "map_min_neighbours": 8,
             "map_rate_hz": 1.0,
         }
@@ -110,9 +108,7 @@ class MaskProjector(Node):
         self.pub_map = self.create_publisher(PointCloud2, "/axial/landmark_map", 1)
         self.pub_map_markers = self.create_publisher(MarkerArray, "/axial/landmark_markers", 1)
         self.landmarks = LineLandmarks(self.p["map_spawn_threshold"], self.p["map_min_separation"],
-                                       self.p["map_max_angle"], self.p["map_voxel"], self.p["map_min_length"],
-                                       self.p["map_min_elongation"],
-                                       dict(zip(self.p["axial_classes"], self.p["map_max_tilt"])))
+                                       self.p["map_max_angle"], self.p["map_voxel"], self.p["map_min_elongation"])
         self.create_timer(1.0 / self.p["map_rate_hz"], self.publish_map)
         self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
         self.tols = dict(zip(self.p["axial_classes"], self.p["split_tol"]))

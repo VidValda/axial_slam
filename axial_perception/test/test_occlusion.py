@@ -71,3 +71,13 @@ def test_surface_mask_keeps_a_separate_piece_at_the_same_depth():
 def test_surface_mask_empty():
     assert surface_mask(np.zeros(0, int), np.zeros(0, int), np.zeros((0, 3)), np.zeros((4, 4), int),
                         0.1, 15, 0.3).shape == (0,)
+
+
+def test_surface_mask_drops_a_piece_in_front_away_from_the_surface():
+    y = np.linspace(-0.4, 0.4, 60)
+    pillar = np.c_[np.zeros(60), y, np.full(60, 4.0)]
+    hidden_top = np.c_[np.linspace(-0.05, 0.05, 12), np.full(12, -0.75), np.full(12, 2.0)]
+    pts = np.vstack([pillar, hidden_top])
+    u, v, img = _mask_frame(pts, 1)
+    keep = surface_mask(u, v, pts, img, 0.1, 5, 0.3)
+    assert keep[:60].all() and not keep[60:].any()

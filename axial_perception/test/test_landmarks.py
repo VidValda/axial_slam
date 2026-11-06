@@ -86,19 +86,11 @@ def test_update_maps_lines_of_a_frame():
     assert sorted(first.values()) == [1, 2]
 
 
-def test_update_drops_short_fat_and_tilted_lines():
-    lm = LineLandmarks(0.3, min_length=1.0, min_elongation=3.0, max_tilt={8: 0.35})
-    stub = pillar(0.0, 0.0, 0.0, 0.5)
-    fat = pillar(2.0, 0.0, 0.0, 1.2, radius=0.4)
-    lying = pillar(0.0, 0.0)[:, [2, 1, 0]] + (0.0, 4.0, 1.0)
-    good = pillar(6.0, 0.0, radius=0.15)
-    assert lm.update(*frame(stub, fat, lying, good)) == {4: 1}
-
-
-def test_tilt_gate_is_per_class():
-    lm = LineLandmarks(0.3, max_tilt={8: 0.35})
-    xyz, _, line = frame(pillar(0.0, 0.0)[:, [2, 1, 0]])
-    assert lm.update(xyz, np.full(len(xyz), 4), line) == {1: 1}
+def test_update_drops_lines_without_a_direction():
+    lm = LineLandmarks(0.3, min_elongation=3.0)
+    stub = pillar(0.0, 0.0, 0.0, 0.3, radius=0.2)
+    good = pillar(2.0, 0.0, radius=0.15)
+    assert lm.update(*frame(stub, good)) == {2: 1}
 
 
 def test_dense_points_drop_strays():
