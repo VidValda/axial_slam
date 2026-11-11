@@ -11,7 +11,6 @@ endif()
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(builtin_interfaces REQUIRED)
@@ -72,20 +71,16 @@ foreach(name landmark_map_gt line_segments_gt mask_clusters_gt record_clusters r
 endforeach()
 target_link_libraries(turn_dataset ${OpenCV_LIBS})
 
-ament_python_install_package(${PROJECT_NAME})
-install(PROGRAMS scripts/mask_projector_py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch rviz DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  find_package(ament_cmake_pytest REQUIRED)
   foreach(name camera clusters kdtree landmarks masks occlusion scan_buffer segments)
     ament_add_gtest(test_${name}_cpp test/test_${name}.cpp)
     target_link_libraries(test_${name}_cpp axial_core)
   endforeach()
   ament_add_gtest(test_mask_projector_cpp test/test_mask_projector.cpp TIMEOUT 60)
   target_link_libraries(test_mask_projector_cpp axial_ros)
-  ament_add_pytest_test(test_python test)
 endif()
 
 ament_package()
