@@ -18,10 +18,12 @@ add_library(axial_core STATIC
   src/camera.cpp
   src/clusters.cpp
   src/masks.cpp
+  src/occlusion.cpp
   src/scan_buffer.cpp
 )
 set_target_properties(axial_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(axial_core PUBLIC include)
+target_include_directories(axial_core SYSTEM PUBLIC third_party)
 target_link_libraries(axial_core PUBLIC Eigen3::Eigen)
 
 ament_python_install_package(${PROJECT_NAME})
@@ -31,7 +33,7 @@ install(DIRECTORY launch rviz DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
-  foreach(name camera clusters masks scan_buffer)
+  foreach(name camera clusters kdtree masks occlusion scan_buffer)
     ament_add_gtest(test_${name}_cpp test/test_${name}.cpp)
     target_link_libraries(test_${name}_cpp axial_core)
   endforeach()
