@@ -17,6 +17,7 @@ find_package(Eigen3 REQUIRED)
 add_library(axial_core STATIC
   src/camera.cpp
   src/clusters.cpp
+  src/landmarks.cpp
   src/masks.cpp
   src/occlusion.cpp
   src/scan_buffer.cpp
@@ -34,7 +35,7 @@ install(DIRECTORY launch rviz DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
-  foreach(name camera clusters kdtree masks occlusion scan_buffer segments)
+  foreach(name camera clusters kdtree landmarks masks occlusion scan_buffer segments)
     ament_add_gtest(test_${name}_cpp test/test_${name}.cpp)
     target_link_libraries(test_${name}_cpp axial_core)
   endforeach()
