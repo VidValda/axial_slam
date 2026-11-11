@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from axial_perception.core.landmarks import LineLandmarks
+from axial_perception.core.landmarks import LineLandmarks, perpendicular
+from axial_perception.core.segments import fit_line
 
 UP = np.array([0.0, 0.0, 1.0])
 
@@ -70,6 +71,28 @@ def test_set_anchor_reserves_id():
     lm.set_anchor(7, (5.0, 0.0, 0.0), UP, class_id=8)
     assert lm.assign(8, (5.1, 0.0, 1.0), UP) == 7
     assert lm.assign(8, (9.0, 0.0, 1.0), UP) == 8
+
+
+def test_set_anchor_moves_points_with_the_line():
+    lm = LineLandmarks(0.3, voxel=0.0)
+    gid = lm.assign(8, (0.0, 0.0, 1.5), UP, pillar(0.0, 0.0))
+    tilted = np.array([0.1, 0.0, 1.0]) / np.linalg.norm([0.1, 0.0, 1.0])
+    lm.set_anchor(gid, (2.0, 1.0, 0.0), tilted)
+    c, d = fit_line(lm.landmarks[gid].points)
+    np.testing.assert_allclose(abs(d @ tilted), 1.0, atol=1e-9)
+    np.testing.assert_allclose(perpendicular(c - np.array([2.0, 1.0, 0.0]), tilted), 0.0, atol=1e-9)
+    assert lm.assign(8, (2.15, 1.0, 0.0), tilted, pillar(2.0, 1.0, radius=0.15)) == gid
+
+
+def test_snap_skips_estimates_beyond_the_separation():
+    lm = LineLandmarks(0.3, min_anchor_separation=1.0, max_angle=0.2)
+    gid = lm.assign(8, (0.0, 0.0, 1.5), UP, pillar(0.0, 0.0))
+    assert not lm.snap(gid, (1.5, 0.0, 0.0), UP)
+    assert not lm.snap(gid, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0))
+    np.testing.assert_allclose(lm.landmarks[gid].point[:2], (0.0, 0.0), atol=1e-9)
+    assert lm.snap(gid, (0.8, 0.0, 0.0), UP)
+    np.testing.assert_allclose(lm.landmarks[gid].point[:2], (0.8, 0.0), atol=1e-9)
+    assert not lm.snap(99, (0.0, 0.0, 0.0), UP)
 
 
 def frame(*clouds):

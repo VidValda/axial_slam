@@ -19,7 +19,7 @@ from axial_perception.core.landmarks import LineLandmarks
 from axial_perception.core.masks import decode_gz_instance
 from axial_perception.core.occlusion import front_mask, surface_mask
 from axial_perception.core.scan_buffer import ScanBuffer
-from axial_perception.core.segments import fit_line, split_clusters
+from axial_perception.core.segments import axis_from_surface, fit_line, split_clusters
 
 PALETTE = np.array([
     [230, 25, 75], [60, 180, 75], [255, 225, 25], [0, 130, 200], [245, 130, 48], [145, 30, 180],
@@ -70,6 +70,8 @@ class MaskProjector(Node):
             "occlusion_behind": 0.3,
             "axial_classes": [4, 6, 8],
             "class_names": ["pipe", "duct", "pillar"],
+            # per axial class, moves detections from the visible face onto the axis; 0 keeps them on the face
+            "class_radius": [0.0],
             "min_points": 5,
             "split_method": "ransac",
             "split_tol": [0.07, 0.25, 0.3],
@@ -84,6 +86,10 @@ class MaskProjector(Node):
             "map_min_elongation": 3.0,
             "map_min_neighbours": 8,
             "map_rate_hz": 1.0,
+            # frame the landmark ids are matched in; "" is odom_frame
+            "map_frame": "",
+            # optimized lines the landmarks are snapped to by id, in a frame TF reaches from map_frame; "" is off
+            "slam_optimized_topic": "",
             "detection_frame": "",
             "detection_frame_id": "",
             "line_dir_std": 0.05,
@@ -115,9 +121,13 @@ class MaskProjector(Node):
         self.landmarks = LineLandmarks(self.p["map_spawn_threshold"], self.p["map_min_separation"],
                                        self.p["map_max_angle"], self.p["map_voxel"], self.p["map_min_elongation"])
         self.create_timer(1.0 / self.p["map_rate_hz"], self.publish_map)
+        self.map_frame = self.p["map_frame"] or self.p["odom_frame"]
+        if self.p["slam_optimized_topic"]:
+            self.create_subscription(DetectionWithIDArray, self.p["slam_optimized_topic"], self.on_optimized, 10)
         self.pub_detections = self.create_publisher(DetectionWithIDArray, "/axial/line_detections", 10)
         self.line_cov = np.diag(np.repeat([self.p["line_dir_std"] ** 2, self.p["line_offset_std"] ** 2], 2))
         self.names = dict(zip(self.p["axial_classes"], self.p["class_names"]))
+        self.radius = dict(zip(self.p["axial_classes"], self.p["class_radius"]))
         self.tols = dict(zip(self.p["axial_classes"], self.p["split_tol"]))
         self.gaps = dict(zip(self.p["axial_classes"], self.p["split_gap"]))
         self.stats = []
@@ -163,13 +173,14 @@ class MaskProjector(Node):
             msg = self.pending_labels[i]
             frame = self.p["camera_frame"] or msg.header.frame_id
             tf = self.lookup(frame, self.p["odom_frame"], msg.header.stamp)
-            if tf is not None:
+            to_map = self.lookup(self.map_frame, self.p["odom_frame"], msg.header.stamp)
+            if tf is not None and to_map is not None:
                 for _ in range(i + 1):
                     self.pending_labels.popleft()
-                self.process(msg, frame, tf)
+                self.process(msg, frame, tf, to_map)
                 return
 
-    def process(self, msg, frame, tf):
+    def process(self, msg, frame, tf, to_map):
         start = time.perf_counter()
         odom = self.scans.points()
         pts = transform(odom, *tf)
@@ -190,7 +201,7 @@ class MaskProjector(Node):
         line = split_clusters(pts[kept], cls, seg, self.p["split_method"], self.tols,
                               self.p["split_min_points"], self.gaps, self.p["split_min_length"])
         split_dt = time.perf_counter() - split_start
-        ids = self.landmarks.update(odom[kept], cls, line)
+        ids = self.landmarks.update(transform(odom[kept], *to_map), cls, line)
         if ids:
             self.publish_detections(msg.header.stamp, frame, pts[kept], cls, line, ids)
 
@@ -212,7 +223,9 @@ class MaskProjector(Node):
         out.header.stamp, out.header.frame_id = stamp, self.p["detection_frame_id"] or target
         for k, gid in ids.items():
             sel = line == k
-            c, d = fit_line(transform(xyz[sel], *tf))
+            c, d = fit_line(xyz[sel])
+            c = transform(axis_from_surface(c, d, self.radius.get(int(cls[sel][0]), 0.0))[None], *tf)[0]
+            d = np.asarray(tf[0]) @ d
             name = self.names.get(int(cls[sel][0]), str(int(cls[sel][0])))
             det = DetectionWithID(id=f"{name}_{gid}", label=name)
             det.geometry.type = Geometry.LINE3D
@@ -223,8 +236,24 @@ class MaskProjector(Node):
             out.detections.append(det)
         self.pub_detections.publish(out)
 
+    def on_optimized(self, msg):
+        tf = self.lookup(self.map_frame, msg.header.frame_id, msg.header.stamp)
+        if tf is None:
+            self.get_logger().warn(f"no TF {msg.header.frame_id} -> {self.map_frame}, landmarks not snapped",
+                                   throttle_duration_sec=5.0)
+            return
+        classes = {name: cls for cls, name in self.names.items()}
+        for det in msg.detections:
+            name, _, gid = det.id.rpartition("_")
+            lm = self.landmarks.landmarks.get(int(gid)) if gid.isdigit() else None
+            if det.geometry.type != Geometry.LINE3D or lm is None or classes.get(name) != lm.class_id:
+                continue
+            l = det.geometry.line3d
+            c = transform(np.array([[l.point.x, l.point.y, l.point.z]]), *tf)[0]
+            self.landmarks.snap(int(gid), c, np.asarray(tf[0]) @ (l.direction.x, l.direction.y, l.direction.z))
+
     def publish_map(self):
-        stamp, frame = self.get_clock().now().to_msg(), self.p["odom_frame"]
+        stamp, frame = self.get_clock().now().to_msg(), self.map_frame
         lms = self.landmarks.landmarks
         if not lms:
             return

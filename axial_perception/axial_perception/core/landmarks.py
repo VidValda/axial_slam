@@ -16,6 +16,15 @@ def perpendicular(v, d):
     return v - np.outer(v @ d, d) if v.ndim == 2 else v - (v @ d) * d
 
 
+def rotation(a, b):
+    """Smallest rotation taking unit vector a onto unit vector b."""
+    v, c = np.cross(a, b), a @ b
+    if c < -1 + 1e-9:
+        return np.eye(3)
+    k = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+    return np.eye(3) + k + k @ k / (1 + c)
+
+
 @dataclass
 class Landmark:
     class_id: int
@@ -89,14 +98,31 @@ class LineLandmarks:
         return gid
 
     def set_anchor(self, gid, point, direction, class_id=0):
-        """Overwrites a line with an authoritative estimate; later ids never reuse gid."""
+        """Overwrites a line with an authoritative estimate and moves its points along, so later refits stay on it;
+        later ids never reuse gid."""
         gid = int(gid)
+        point, direction = np.asarray(point, float), canonical(direction)
         lm = self.landmarks.get(gid)
         if lm is None:
-            self.landmarks[gid] = Landmark(int(class_id), np.asarray(point, float).copy(), canonical(direction))
+            self.landmarks[gid] = Landmark(int(class_id), point.copy(), direction)
         else:
-            lm.point, lm.direction = np.asarray(point, float).copy(), canonical(direction)
+            c = point + ((lm.point - point) @ direction) * direction
+            lm.points = c + (lm.points - lm.point) @ rotation(lm.direction, direction).T
+            lm.point, lm.direction = c, direction
         self._next_id = max(self._next_id, gid + 1)
+
+    def snap(self, gid, point, direction):
+        """set_anchor on an existing landmark, unless the estimate is beyond min_anchor_separation or max_angle from
+        it: such an estimate is more likely another line than a correction of this one. Returns whether it snapped."""
+        lm = self.landmarks.get(int(gid))
+        if lm is None:
+            return False
+        point, direction = np.asarray(point, float), canonical(direction)
+        if (abs(direction @ lm.direction) < self.cos_max_angle or
+                np.linalg.norm(perpendicular(lm.point - point, direction)) > self.min_anchor_separation):
+            return False
+        self.set_anchor(gid, point, direction)
+        return True
 
     def voxelize(self, pts):
         if self.voxel <= 0 or len(pts) == 0:

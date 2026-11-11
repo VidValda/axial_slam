@@ -6,6 +6,13 @@ def fit_line(pts):
     return c, np.linalg.svd(pts - c, full_matrices=False)[2][0]
 
 
+def axis_from_surface(c, d, radius):
+    """Moves a line fitted to the visible face of a cylinder seen from the origin onto its axis, radius further away."""
+    a = c - (c @ d) * d
+    n = np.linalg.norm(a)
+    return c + radius * a / n if radius > 0 and n > 0 else c
+
+
 def line_distance(pts, c, d):
     r = pts - c
     return np.linalg.norm(r - np.outer(r @ d, d), axis=1)
