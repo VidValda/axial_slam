@@ -35,21 +35,29 @@ public:
 
   const Points & points() const {return pts_;}
 
+  template<class F>
+  void visit_within(const Point & q, double radius, F && f) const
+  {
+    if (!index_ || radius < 0) {
+      return;
+    }
+    Visit<F> visit{std::nextafter(radius * radius, std::numeric_limits<double>::infinity()), f};
+    index_->findNeighbors(visit, q.data(), nanoflann::SearchParameters(0, false));
+  }
+
   Indices within(const Point & q, double radius) const
   {
     Indices out;
-    if (!index_ || radius < 0) {
-      return out;
-    }
-    std::vector<nanoflann::ResultItem<uint32_t, double>> matches;
-    const double r2 = std::nextafter(radius * radius, std::numeric_limits<double>::infinity());
-    index_->radiusSearch(q.data(), r2, matches, nanoflann::SearchParameters(0, false));
-    out.reserve(matches.size());
-    for (const auto & m : matches) {
-      out.push_back(static_cast<int>(m.first));
-    }
+    visit_within(q, radius, [&out](int i) {out.push_back(i);});
     std::sort(out.begin(), out.end());
     return out;
+  }
+
+  size_t count_within(const Point & q, double radius) const
+  {
+    size_t n = 0;
+    visit_within(q, radius, [&n](int) {++n;});
+    return n;
   }
 
   std::pair<int, double> nearest(
@@ -73,6 +81,26 @@ private:
     }
     template<class Box>
     bool kdtree_get_bbox(Box &) const {return false;}
+  };
+
+  template<class F>
+  struct Visit
+  {
+    using DistanceType = double;
+    using IndexType = uint32_t;
+
+    double r2;
+    F & f;
+
+    bool addPoint(double d, uint32_t i)
+    {
+      if (d < r2) {
+        f(static_cast<int>(i));
+      }
+      return true;
+    }
+    double worstDist() const {return r2;}
+    bool full() const {return true;}
   };
 
   struct Nearest

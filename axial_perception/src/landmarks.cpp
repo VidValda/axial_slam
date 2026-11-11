@@ -208,7 +208,7 @@ Cloud LineLandmarks::dense_points(int gid, int min_neighbours) const
   KdTree<3> tree(pts);
   Indices keep;
   for (Eigen::Index i = 0; i < pts.cols(); ++i) {
-    if (static_cast<int>(tree.within(pts.col(i), 1.8 * voxel_).size()) - 1 >= min_neighbours) {
+    if (static_cast<int>(tree.count_within(pts.col(i), 1.8 * voxel_)) - 1 >= min_neighbours) {
       keep.push_back(static_cast<int>(i));
     }
   }

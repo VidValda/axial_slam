@@ -67,6 +67,7 @@ TEST(KdTree, WithinMatchesBruteForce)
       }
     }
     EXPECT_EQ(tree.within(pts.col(q), 0.2), brute);
+    EXPECT_EQ(tree.count_within(pts.col(q), 0.2), brute.size());
   }
 }
 
@@ -74,5 +75,6 @@ TEST(KdTree, Empty)
 {
   KdTree<3> tree(Eigen::Matrix3Xd(3, 0));
   EXPECT_TRUE(tree.within(Eigen::Vector3d::Zero(), 1.0).empty());
+  EXPECT_EQ(tree.count_within(Eigen::Vector3d::Zero(), 1.0), 0u);
   EXPECT_EQ(tree.nearest(Eigen::Vector3d::Zero()).first, -1);
 }

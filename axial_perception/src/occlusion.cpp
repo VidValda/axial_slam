@@ -43,9 +43,11 @@ std::vector<int> components(const Cloud & pts, double link)
   UnionFind uf(n);
   KdTree<3> tree(pts);
   for (size_t j = 0; j < n; ++j) {
-    for (int k : tree.within(pts.col(static_cast<Eigen::Index>(j)), link)) {
-      uf.join(j, static_cast<size_t>(k));
-    }
+    tree.visit_within(pts.col(static_cast<Eigen::Index>(j)), link, [&](int k) {
+        if (static_cast<size_t>(k) > j) {
+          uf.join(j, static_cast<size_t>(k));
+        }
+      });
   }
   std::vector<int> label(n);
   std::map<size_t, int> root_label;
@@ -153,17 +155,14 @@ std::vector<bool> surface_mask(
       }
     }
 
+    std::vector<bool> good(size.size());
     for (size_t c = 0; c < size.size(); ++c) {
-      bool good = size[c] == largest;
-      if (!good && size[c] >= min_points) {
-        good = (dz[c].empty() || median(dz[c]) < behind) && median(front[c]) > -behind;
-      }
-      if (good) {
-        for (size_t j = 0; j < n; ++j) {
-          if (lab[j] == static_cast<int>(c)) {
-            keep[static_cast<size_t>(i[j])] = true;
-          }
-        }
+      good[c] = size[c] == largest || (size[c] >= min_points &&
+        (dz[c].empty() || median(dz[c]) < behind) && median(front[c]) > -behind);
+    }
+    for (size_t j = 0; j < n; ++j) {
+      if (good[static_cast<size_t>(lab[j])]) {
+        keep[static_cast<size_t>(i[j])] = true;
       }
     }
   }
