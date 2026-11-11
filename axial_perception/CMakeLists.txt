@@ -22,6 +22,9 @@ find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
+find_package(yaml-cpp REQUIRED)
+find_package(ZLIB REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 
 add_library(axial_core STATIC
   src/camera.cpp
@@ -58,6 +61,16 @@ target_link_libraries(axial_ros PUBLIC
 add_executable(mask_projector src/mask_projector_main.cpp)
 target_link_libraries(mask_projector axial_ros)
 install(TARGETS mask_projector DESTINATION lib/${PROJECT_NAME})
+
+add_library(axial_bench STATIC benchmarks/bench.cpp)
+target_include_directories(axial_bench PUBLIC benchmarks)
+target_link_libraries(axial_bench PUBLIC axial_ros yaml-cpp ZLIB::ZLIB)
+foreach(name landmark_map_gt line_segments_gt mask_clusters_gt record_clusters record_raw turn_dataset)
+  add_executable(${name} benchmarks/${name}.cpp)
+  target_link_libraries(${name} axial_bench)
+  install(TARGETS ${name} DESTINATION lib/${PROJECT_NAME})
+endforeach()
+target_link_libraries(turn_dataset ${OpenCV_LIBS})
 
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/mask_projector_py DESTINATION lib/${PROJECT_NAME})
