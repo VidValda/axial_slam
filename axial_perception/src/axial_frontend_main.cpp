@@ -4,16 +4,16 @@
 
 #include <rclcpp/rclcpp.hpp>
 
-#include "axial_perception/mask_projector.hpp"
+#include "axial_perception/axial_frontend.hpp"
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   int code = 0;
   try {
-    rclcpp::spin(std::make_shared<axial_perception::MaskProjector>());
+    rclcpp::spin(std::make_shared<axial_perception::AxialFrontend>());
   } catch (const std::exception & e) {
-    std::cerr << "mask_projector: " << e.what() << std::endl;
+    std::cerr << "axial_frontend: " << e.what() << std::endl;
     code = 1;
   }
   rclcpp::shutdown();

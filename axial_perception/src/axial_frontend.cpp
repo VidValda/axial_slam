@@ -1,4 +1,4 @@
-#include "axial_perception/mask_projector.hpp"
+#include "axial_perception/axial_frontend.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -61,8 +61,8 @@ double positive(double value, const std::string & name)
 
 }  // namespace
 
-MaskProjector::MaskProjector(const rclcpp::NodeOptions & options)
-: rclcpp::Node("mask_projector", options),
+AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
+: rclcpp::Node("axial_frontend", options),
   scans_(static_cast<size_t>(positive(static_cast<double>(declare_parameter<int64_t>("n_scans", 5)), "n_scans"))),
   landmarks_(
     declare_parameter<double>("map_spawn_threshold", 0.5), declare_parameter<double>("map_min_separation", 1.0),
@@ -151,18 +151,18 @@ MaskProjector::MaskProjector(const rclcpp::NodeOptions & options)
   stats_since_ = std::chrono::steady_clock::now();
 }
 
-std::string MaskProjector::name_of(int cls) const
+std::string AxialFrontend::name_of(int cls) const
 {
   const auto it = names_.find(cls);
   return it == names_.end() ? std::to_string(cls) : it->second;
 }
 
-void MaskProjector::on_info(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg)
+void AxialFrontend::on_info(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg)
 {
   K_ = Intrinsics{msg->k[0], msg->k[4], msg->k[2], msg->k[5]};
 }
 
-void MaskProjector::on_cloud(const PointCloud2::ConstSharedPtr & msg)
+void AxialFrontend::on_cloud(const PointCloud2::ConstSharedPtr & msg)
 {
   if (pending_scans_.size() == 20) {
     pending_scans_.pop_front();
@@ -171,12 +171,12 @@ void MaskProjector::on_cloud(const PointCloud2::ConstSharedPtr & msg)
   flush();
 }
 
-void MaskProjector::on_image(const Image::ConstSharedPtr & msg)
+void AxialFrontend::on_image(const Image::ConstSharedPtr & msg)
 {
   image_ = msg;
 }
 
-void MaskProjector::on_labels(const Image::ConstSharedPtr & msg)
+void AxialFrontend::on_labels(const Image::ConstSharedPtr & msg)
 {
   const rclcpp::Time stamp(msg->header.stamp, RCL_ROS_TIME);
   if (!last_stamp_ || static_cast<double>((stamp - *last_stamp_).nanoseconds()) >= 1e9 / max_rate_hz_) {
@@ -190,13 +190,13 @@ void MaskProjector::on_labels(const Image::ConstSharedPtr & msg)
   flush();
 }
 
-void MaskProjector::flush()
+void AxialFrontend::flush()
 {
   flush_scans();
   flush_labels();
 }
 
-void MaskProjector::flush_scans()
+void AxialFrontend::flush_scans()
 {
   while (!pending_scans_.empty()) {
     const PointCloud2::ConstSharedPtr msg = pending_scans_.front();
@@ -215,7 +215,7 @@ void MaskProjector::flush_scans()
   }
 }
 
-void MaskProjector::flush_labels()
+void AxialFrontend::flush_labels()
 {
   if (!K_ || scans_.size() == 0) {
     return;
@@ -237,7 +237,7 @@ void MaskProjector::flush_labels()
   }
 }
 
-void MaskProjector::process(const Image & msg, const std::string & frame, const Rigid & tf, const Rigid & to_map)
+void AxialFrontend::process(const Image & msg, const std::string & frame, const Rigid & tf, const Rigid & to_map)
 {
   const auto start = std::chrono::steady_clock::now();
   const Cloud odom = scans_.points();
@@ -272,7 +272,7 @@ void MaskProjector::process(const Image & msg, const std::string & frame, const 
   log_stats(s);
 }
 
-void MaskProjector::publish_detections(
+void AxialFrontend::publish_detections(
   const builtin_interfaces::msg::Time & stamp, const std::string & frame, const Cloud & xyz,
   const std::vector<int> & cls, const Labels & line, const std::map<int, int> & ids)
 {
@@ -308,7 +308,7 @@ void MaskProjector::publish_detections(
   pub_detections_->publish(out);
 }
 
-void MaskProjector::on_optimized(const Detections::ConstSharedPtr & msg)
+void AxialFrontend::on_optimized(const Detections::ConstSharedPtr & msg)
 {
   const auto tf = lookup(map_frame_, msg->header.frame_id, msg->header.stamp);
   if (!tf) {
@@ -344,7 +344,7 @@ void MaskProjector::on_optimized(const Detections::ConstSharedPtr & msg)
   }
 }
 
-void MaskProjector::publish_map()
+void AxialFrontend::publish_map()
 {
   const auto & lms = landmarks_.landmarks();
   if (lms.empty()) {
@@ -412,7 +412,7 @@ void MaskProjector::publish_map()
   }
 }
 
-void MaskProjector::log_stats(const Stats & frame)
+void AxialFrontend::log_stats(const Stats & frame)
 {
   stats_.pts += frame.pts;
   stats_.kept += frame.kept;
@@ -434,7 +434,7 @@ void MaskProjector::log_stats(const Stats & frame)
   stats_since_ = std::chrono::steady_clock::now();
 }
 
-std::optional<Rigid> MaskProjector::lookup(
+std::optional<Rigid> AxialFrontend::lookup(
   const std::string & target, const std::string & source, const builtin_interfaces::msg::Time & stamp) const
 {
   const tf2::TimePoint t = tf2_ros::fromMsg(stamp);
@@ -450,7 +450,7 @@ std::optional<Rigid> MaskProjector::lookup(
   }
 }
 
-void MaskProjector::publish_clusters(
+void AxialFrontend::publish_clusters(
   const builtin_interfaces::msg::Time & stamp, const std::string & frame, const Cloud & xyz,
   const std::vector<int> & cls, const std::vector<int> & seg, const Labels & line)
 {
@@ -469,7 +469,7 @@ void MaskProjector::publish_clusters(
   pub_clusters_->publish(float_cloud({"x", "y", "z", "class_id", "segment", "line", "rgb"}, data, header));
 }
 
-void MaskProjector::publish_overlay(const Projection & proj, const Indices & kept, const Labels & line)
+void AxialFrontend::publish_overlay(const Projection & proj, const Indices & kept, const Labels & line)
 {
   const Image & img = *image_;
   if (img.encoding != "rgb8") {
@@ -513,7 +513,7 @@ void MaskProjector::publish_overlay(const Projection & proj, const Indices & kep
   pub_overlay_->publish(out);
 }
 
-void MaskProjector::publish_markers(
+void AxialFrontend::publish_markers(
   const builtin_interfaces::msg::Time & stamp, const std::string & frame, const Cloud & xyz,
   const std::vector<int> & cls, const Labels & line)
 {

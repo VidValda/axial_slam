@@ -27,10 +27,10 @@
 namespace axial_perception
 {
 
-class MaskProjector : public rclcpp::Node
+class AxialFrontend : public rclcpp::Node
 {
 public:
-  explicit MaskProjector(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  explicit AxialFrontend(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 protected:
   using Image = sensor_msgs::msg::Image;

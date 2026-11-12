@@ -15,9 +15,9 @@
 #include <tf2_ros/static_transform_broadcaster.h>
 
 #include "axial_perception/cloud_msg.hpp"
-#include "axial_perception/mask_projector.hpp"
+#include "axial_perception/axial_frontend.hpp"
 
-using axial_perception::MaskProjector;
+using axial_perception::AxialFrontend;
 using Detections = dps_slam_msgs::msg::DetectionWithIDArray;
 using sensor_msgs::msg::PointCloud2;
 
@@ -76,7 +76,7 @@ sensor_msgs::msg::Image labels(const builtin_interfaces::msg::Time & stamp)
   return img;
 }
 
-class MaskProjectorTest : public ::testing::Test
+class AxialFrontendTest : public ::testing::Test
 {
 protected:
   static void SetUpTestSuite() {rclcpp::init(0, nullptr);}
@@ -85,10 +85,10 @@ protected:
 
 }  // namespace
 
-TEST_F(MaskProjectorTest, PublishesClustersAndLineDetections)
+TEST_F(AxialFrontendTest, PublishesClustersAndLineDetections)
 {
-  auto projector = std::make_shared<MaskProjector>(options());
-  auto io = std::make_shared<rclcpp::Node>("mask_projector_test_io");
+  auto frontend = std::make_shared<AxialFrontend>(options());
+  auto io = std::make_shared<rclcpp::Node>("axial_frontend_test_io");
   tf2_ros::StaticTransformBroadcaster tf(io);
   geometry_msgs::msg::TransformStamped t;
   t.header.frame_id = "test_odom";
@@ -107,7 +107,7 @@ TEST_F(MaskProjectorTest, PublishesClustersAndLineDetections)
     "/axial_test/line_detections", 10, [&](const Detections::ConstSharedPtr & m) {detections = m;});
 
   rclcpp::executors::SingleThreadedExecutor exec;
-  exec.add_node(projector);
+  exec.add_node(frontend);
   exec.add_node(io);
   sensor_msgs::msg::CameraInfo info;
   info.k = {100, 0, 50, 0, 100, 50, 0, 0, 1};
@@ -146,12 +146,12 @@ TEST_F(MaskProjectorTest, PublishesClustersAndLineDetections)
   EXPECT_EQ(l.covariance[1], 0.0);
 }
 
-TEST_F(MaskProjectorTest, RejectsBadParameters)
+TEST_F(AxialFrontendTest, RejectsBadParameters)
 {
-  EXPECT_THROW(MaskProjector(options({{"split_method", "nope"}})), std::invalid_argument);
-  EXPECT_THROW(MaskProjector(options({{"occlusion_method", "nope"}})), std::invalid_argument);
-  EXPECT_THROW(MaskProjector(options({{"n_scans", 0}})), std::invalid_argument);
-  EXPECT_THROW(MaskProjector(options({{"split_tol", std::vector<double>{}}})), std::invalid_argument);
+  EXPECT_THROW(AxialFrontend(options({{"split_method", "nope"}})), std::invalid_argument);
+  EXPECT_THROW(AxialFrontend(options({{"occlusion_method", "nope"}})), std::invalid_argument);
+  EXPECT_THROW(AxialFrontend(options({{"n_scans", 0}})), std::invalid_argument);
+  EXPECT_THROW(AxialFrontend(options({{"split_tol", std::vector<double>{}}})), std::invalid_argument);
   EXPECT_THROW(
-    MaskProjector(options({{"map_spawn_threshold", 2.0}, {"map_min_separation", 1.0}})), std::invalid_argument);
+    AxialFrontend(options({{"map_spawn_threshold", 2.0}, {"map_min_separation", 1.0}})), std::invalid_argument);
 }

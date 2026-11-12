@@ -42,7 +42,7 @@ target_link_libraries(axial_core PUBLIC Eigen3::Eigen)
 
 add_library(axial_ros STATIC
   src/cloud_msg.cpp
-  src/mask_projector.cpp
+  src/axial_frontend.cpp
 )
 target_link_libraries(axial_ros PUBLIC
   axial_core
@@ -57,9 +57,9 @@ target_link_libraries(axial_ros PUBLIC
   ${visualization_msgs_TARGETS}
 )
 
-add_executable(mask_projector src/mask_projector_main.cpp)
-target_link_libraries(mask_projector axial_ros)
-install(TARGETS mask_projector DESTINATION lib/${PROJECT_NAME})
+add_executable(axial_frontend src/axial_frontend_main.cpp)
+target_link_libraries(axial_frontend axial_ros)
+install(TARGETS axial_frontend DESTINATION lib/${PROJECT_NAME})
 
 add_library(axial_bench STATIC benchmarks/bench.cpp)
 target_include_directories(axial_bench PUBLIC benchmarks)
@@ -79,8 +79,8 @@ if(BUILD_TESTING)
     ament_add_gtest(test_${name}_cpp test/test_${name}.cpp)
     target_link_libraries(test_${name}_cpp axial_core)
   endforeach()
-  ament_add_gtest(test_mask_projector_cpp test/test_mask_projector.cpp TIMEOUT 60)
-  target_link_libraries(test_mask_projector_cpp axial_ros)
+  ament_add_gtest(test_axial_frontend_cpp test/test_axial_frontend.cpp TIMEOUT 60)
+  target_link_libraries(test_axial_frontend_cpp axial_ros)
 endif()
 
 ament_package()

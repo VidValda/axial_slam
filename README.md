@@ -4,7 +4,7 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
 
 ## axial_perception
 
-`mask_projector` turns instance masks and a LiDAR cloud into one point cluster per mask:
+`axial_frontend` turns instance masks and a LiDAR cloud into one point cluster per mask:
 
 1. Each scan is moved into `odom_frame` with TF at its stamp, and the last `n_scans` are kept.
 2. For each mask image, the buffer is moved into `camera_frame` with TF at the image stamp and projected with the
@@ -29,7 +29,7 @@ Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinit
    - `mst_dp`: points ordered along the longest path of their minimum spanning tree, then split with segmented least
      squares.
 
-The node is C++ (`src/mask_projector.cpp`). The ROS-free maths lives in the other `src/*.cpp` and is covered by
+The node is C++ (`src/axial_frontend.cpp`). The ROS-free maths lives in the other `src/*.cpp` and is covered by
 `colcon test`.
 
 `split_method: none` turns the splitting off: every mask is one line.
@@ -71,9 +71,9 @@ Parameters, with defaults:
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |
 
 ```bash
-ros2 launch axial_perception mask_projection.launch.py params_file:=<yaml> [rviz:=true fixed_frame:=<frame>] [use_sim_time:=true]
+ros2 launch axial_perception axial_frontend.launch.py params_file:=<yaml> [rviz:=true fixed_frame:=<frame>] [use_sim_time:=true]
 ```
 
-`rviz:=true` opens `rviz/mask_projection.rviz` (clusters, labels and overlay) with `fixed_frame` (default `odom`) as the fixed frame.
+`rviz:=true` opens `rviz/axial_frontend.rviz` (clusters, labels and overlay) with `fixed_frame` (default `odom`) as the fixed frame.
 
 The node logs the input and kept point counts, masks, lines and the split and processing times every 5 s.

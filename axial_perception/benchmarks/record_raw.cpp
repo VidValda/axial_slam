@@ -11,7 +11,7 @@
 
 #include "bench.hpp"
 #include "axial_perception/masks.hpp"
-#include "axial_perception/mask_projector.hpp"
+#include "axial_perception/axial_frontend.hpp"
 
 using namespace axial_perception;
 using namespace axial_perception::bench;
@@ -42,7 +42,7 @@ std::vector<bool> dilate(const InstanceImage & img, const std::vector<int> & cla
   return out;
 }
 
-class Recorder : public MaskProjector
+class Recorder : public AxialFrontend
 {
 public:
   Recorder(const std::string & out, double every, int margin)

@@ -308,7 +308,7 @@ std::vector<int> section_ids(
 
 Params load_params(const std::string & path)
 {
-  const YAML::Node p = YAML::LoadFile(path)["mask_projector"]["ros__parameters"];
+  const YAML::Node p = YAML::LoadFile(path)["axial_frontend"]["ros__parameters"];
   Params out;
   auto & pr = out.projector;
   pr.depth_min = param(p, "depth_min", pr.depth_min);
