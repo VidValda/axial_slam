@@ -88,6 +88,9 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   const auto classes = declare_parameter<std::vector<int64_t>>("axial_classes", {4, 6, 8});
   const auto class_names = declare_parameter<std::vector<std::string>>("class_names", {"pipe", "duct", "pillar"});
   const auto class_radius = declare_parameter<std::vector<double>>("class_radius", {0.0});
+  const auto class_spawn = declare_parameter<std::vector<double>>("class_spawn_threshold", std::vector<double>{});
+  const auto class_separation = declare_parameter<std::vector<double>>("class_min_separation", std::vector<double>{});
+  const auto slam_classes = declare_parameter<std::vector<int64_t>>("slam_classes", std::vector<int64_t>{});
   const auto point_classes = declare_parameter<std::vector<int64_t>>("point_classes", std::vector<int64_t>{});
   const auto point_names = declare_parameter<std::vector<std::string>>("point_class_names", std::vector<std::string>{});
   projector_.min_points = static_cast<int>(declare_parameter<int64_t>("min_points", 5));
@@ -119,7 +122,20 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
       throw std::invalid_argument("class " + std::to_string(c) + " is in both axial_classes and point_classes");
     }
   }
+  for (const auto c : slam_classes) {
+    if (std::find(classes.begin(), classes.end(), c) == classes.end()) {
+      throw std::invalid_argument("slam class " + std::to_string(c) + " is not in axial_classes");
+    }
+  }
+  if (class_spawn.size() != class_separation.size() || (!class_spawn.empty() && class_spawn.size() != classes.size())) {
+    throw std::invalid_argument("class_spawn_threshold and class_min_separation need one value per axial class");
+  }
+  for (size_t i = 0; i < class_spawn.size(); ++i) {
+    landmarks_.set_class_thresholds(static_cast<int>(classes[i]), class_spawn[i], class_separation[i]);
+  }
   axial_classes_.assign(classes.begin(), classes.end());
+  slam_classes_.assign(slam_classes.empty() ? classes.begin() : slam_classes.begin(),
+    slam_classes.empty() ? classes.end() : slam_classes.end());
   projector_.classes.assign(classes.begin(), classes.end());
   projector_.classes.insert(projector_.classes.end(), point_classes.begin(), point_classes.end());
   names_ = zip(classes, class_names);
@@ -314,6 +330,9 @@ void AxialFrontend::publish_detections(
   for (const auto & [k, gid] : ids) {
     const Indices & sel = members.at(k);
     const int c = cls[static_cast<size_t>(sel.front())];
+    if (std::find(slam_classes_.begin(), slam_classes_.end(), c) == slam_classes_.end()) {
+      continue;
+    }
     const Line fit = fit_line(select(xyz, sel));
     const auto r = radius_.find(c);
     const Eigen::Vector3d p = tf->apply(axis_from_surface(fit.c, fit.d, r == radius_.end() ? 0.0 : r->second));
@@ -329,7 +348,9 @@ void AxialFrontend::publish_detections(
     std::copy(line_cov_.begin(), line_cov_.end(), det.geometry.line3d.covariance.begin());
     out.detections.push_back(std::move(det));
   }
-  pub_detections_->publish(out);
+  if (!out.detections.empty()) {
+    pub_detections_->publish(out);
+  }
 }
 
 void AxialFrontend::on_optimized(const Detections::ConstSharedPtr & msg)

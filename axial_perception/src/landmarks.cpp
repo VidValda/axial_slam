@@ -74,6 +74,22 @@ LineLandmarks::LineLandmarks(
   }
 }
 
+void LineLandmarks::set_class_thresholds(int class_id, double spawn_threshold, double min_anchor_separation)
+{
+  if (min_anchor_separation < spawn_threshold) {
+    throw std::invalid_argument(
+            "min_anchor_separation (" + std::to_string(min_anchor_separation) + ") must be >= spawn_threshold (" +
+            std::to_string(spawn_threshold) + ") for class " + std::to_string(class_id));
+  }
+  class_thresholds_[class_id] = {spawn_threshold, min_anchor_separation};
+}
+
+std::pair<double, double> LineLandmarks::thresholds(int class_id) const
+{
+  const auto it = class_thresholds_.find(class_id);
+  return it == class_thresholds_.end() ? std::make_pair(spawn_threshold_, min_anchor_separation_) : it->second;
+}
+
 bool LineLandmarks::accepts(const Cloud & pts, const Eigen::Vector3d & c) const
 {
   if (pts.cols() < 2) {
@@ -117,8 +133,9 @@ std::pair<int, double> LineLandmarks::nearest(
 int LineLandmarks::assign(int class_id, const Eigen::Vector3d & c, const Eigen::Vector3d & dir, const Cloud & pts)
 {
   const Eigen::Vector3d d = canonical(dir);
+  const auto [spawn, separation] = thresholds(class_id);
   auto [gid, dist] = nearest(class_id, c, d);
-  if (gid >= 0 && dist < spawn_threshold_) {
+  if (gid >= 0 && dist < spawn) {
     Landmark & lm = landmarks_.at(gid);
     if (pts.cols() > 0) {
       Cloud both(3, lm.points.cols() + pts.cols());
@@ -128,7 +145,7 @@ int LineLandmarks::assign(int class_id, const Eigen::Vector3d & c, const Eigen::
       lm.point = l.c;
       lm.direction = canonical(l.d);
     }
-  } else if (gid < 0 || dist >= min_anchor_separation_) {
+  } else if (gid < 0 || dist >= separation) {
     gid = next_id_++;
     Landmark lm;
     lm.class_id = class_id;
@@ -171,7 +188,7 @@ bool LineLandmarks::snap(int gid, const Eigen::Vector3d & point, const Eigen::Ve
   const Eigen::Vector3d direction = canonical(dir);
   const Landmark & lm = it->second;
   if (std::abs(direction.dot(lm.direction)) < cos_max_angle_ ||
-    perpendicular(lm.point - point, direction).norm() > min_anchor_separation_)
+    perpendicular(lm.point - point, direction).norm() > thresholds(lm.class_id).second)
   {
     return false;
   }

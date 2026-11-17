@@ -97,6 +97,7 @@ private:
   LineLandmarks landmarks_;
   PointLandmarks points_;
   std::vector<int> axial_classes_;
+  std::vector<int> slam_classes_;
   std::deque<PointCloud2::ConstSharedPtr> pending_scans_;
   std::deque<Image::ConstSharedPtr> pending_labels_;
   Image::ConstSharedPtr image_;

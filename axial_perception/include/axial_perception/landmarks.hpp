@@ -31,6 +31,7 @@ public:
     double spawn_threshold, std::optional<double> min_anchor_separation = std::nullopt,
     double max_angle = 0.35, double voxel = 0.05, double min_elongation = 0.0);
 
+  void set_class_thresholds(int class_id, double spawn_threshold, double min_anchor_separation);
   bool accepts(const Cloud & pts, const Eigen::Vector3d & c) const;
   std::map<int, int> update(const Cloud & xyz, const std::vector<int> & cls, const Labels & line);
   std::pair<int, double> nearest(int class_id, const Eigen::Vector3d & c, const Eigen::Vector3d & d) const;
@@ -43,11 +44,14 @@ public:
   const std::map<int, Landmark> & landmarks() const {return landmarks_;}
 
 private:
+  std::pair<double, double> thresholds(int class_id) const;
+
   double spawn_threshold_;
   double min_anchor_separation_;
   double cos_max_angle_;
   double voxel_;
   double min_elongation_;
+  std::map<int, std::pair<double, double>> class_thresholds_;
   std::map<int, Landmark> landmarks_;
   int next_id_ = 1;
 };

@@ -104,6 +104,35 @@ TEST(Landmarks, ForceMatchBandDoesNotTouchLandmark)
   EXPECT_EQ(lm.landmarks().at(a).points.cols(), n);
 }
 
+TEST(Landmarks, ClassThresholdsKeepCloseLinesApart)
+{
+  LineLandmarks lm(0.5, 1.0);
+  lm.set_class_thresholds(4, 0.15, 0.2);
+  const Eigen::Vector3d x = Eigen::Vector3d::UnitX();
+  const int low = lm.assign(4, {0, 0, 2.4}, x);
+  EXPECT_EQ(lm.assign(4, {3, 0.07, 2.4}, x), low);
+  EXPECT_NE(lm.assign(4, {0, 0, 2.7}, x), low);
+  EXPECT_EQ(lm.landmarks().size(), 2u);
+  const int a = lm.assign(8, {0, 0, 1.5}, UP);
+  EXPECT_EQ(lm.assign(8, {0.4, 0, 1.5}, UP), a);
+}
+
+TEST(Landmarks, ClassThresholdsChecked)
+{
+  LineLandmarks lm(0.5, 1.0);
+  EXPECT_THROW(lm.set_class_thresholds(4, 0.3, 0.2), std::invalid_argument);
+}
+
+TEST(Landmarks, SnapUsesTheClassSeparation)
+{
+  LineLandmarks lm(0.5, 1.0);
+  lm.set_class_thresholds(4, 0.15, 0.2);
+  const Eigen::Vector3d x = Eigen::Vector3d::UnitX();
+  const int a = lm.assign(4, {0, 0, 2.4}, x, pillar(0, 0));
+  EXPECT_FALSE(lm.snap(a, {0, 0, 2.7}, x));
+  EXPECT_TRUE(lm.snap(a, {0, 0, 2.5}, x));
+}
+
 TEST(Landmarks, MatchRefitsLineToAllPoints)
 {
   LineLandmarks lm(0.3, std::nullopt, 0.35, 0.0);

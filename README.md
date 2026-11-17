@@ -105,6 +105,7 @@ Parameters, with defaults:
 | `occlusion_window`, `occlusion_tol` | 9, 0.1 | `zbuffer`: window in px and tolerance in m |
 | `occlusion_link`, `occlusion_radius`, `occlusion_behind` | 0.1, 15, 0.3 | `mask`: 3D link in m, image radius in px, depth behind the object in m |
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
+| `slam_classes` | `[]` | axial classes whose lines go to DPS-SLAM; empty sends them all. The others stay in the landmark map only |
 | `point_classes`, `point_class_names` | `[]`, `[]` | classes positioned in the map as points (median of their mask points, matched within `point_match_radius`, 1.0 m); never sent to DPS-SLAM. They show in `/axial/landmark_map` with negative `landmark` ids and as `point_landmarks` markers |
 | `min_points` | 5 | smallest cluster |
 | `split_method` | `ransac` | `none`, `ransac`, `pearl`, `jlinkage`, `mst_dp` (`split_methods()` in `src/segments.cpp`) |
@@ -112,6 +113,8 @@ Parameters, with defaults:
 | `split_gap` | `[0.5, 1.5, 1.0]` | gap in m along a line that cuts it, per class (0 turns it off) |
 | `split_min_points`, `split_min_length` | 5, 0.5 | smallest line in points and in m |
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |
+| `map_spawn_threshold`, `map_min_separation` | 0.5, 1.0 | landmark map: perpendicular distance in m that matches a landmark, and below which no new one spawns |
+| `class_spawn_threshold`, `class_min_separation` | `[]`, `[]` | the same per class of `axial_classes`, for lines closer together than pillars, like pipe bundles |
 
 ```bash
 ros2 launch axial_perception axial_frontend.launch.py params_file:=<yaml> [rviz:=true fixed_frame:=<frame>] [use_sim_time:=true]
