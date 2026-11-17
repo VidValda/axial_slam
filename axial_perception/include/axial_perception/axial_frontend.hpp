@@ -21,6 +21,7 @@
 
 #include "axial_perception/camera.hpp"
 #include "axial_perception/landmarks.hpp"
+#include "axial_perception/point_landmarks.hpp"
 #include "axial_perception/projector.hpp"
 #include "axial_perception/scan_buffer.hpp"
 
@@ -93,6 +94,8 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
   LineLandmarks landmarks_;
+  PointLandmarks points_;
+  std::vector<int> axial_classes_;
   std::deque<PointCloud2::ConstSharedPtr> pending_scans_;
   std::deque<Image::ConstSharedPtr> pending_labels_;
   Image::ConstSharedPtr image_;

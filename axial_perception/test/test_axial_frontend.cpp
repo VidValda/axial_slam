@@ -151,6 +151,7 @@ TEST_F(AxialFrontendTest, RejectsBadParameters)
   EXPECT_THROW(AxialFrontend(options({{"split_method", "nope"}})), std::invalid_argument);
   EXPECT_THROW(AxialFrontend(options({{"occlusion_method", "nope"}})), std::invalid_argument);
   EXPECT_THROW(AxialFrontend(options({{"n_scans", 0}})), std::invalid_argument);
+  EXPECT_THROW(AxialFrontend(options({{"point_classes", std::vector<int64_t>{8}}})), std::invalid_argument);
   EXPECT_THROW(AxialFrontend(options({{"split_tol", std::vector<double>{}}})), std::invalid_argument);
   EXPECT_THROW(
     AxialFrontend(options({{"map_spawn_threshold", 2.0}, {"map_min_separation", 1.0}})), std::invalid_argument);

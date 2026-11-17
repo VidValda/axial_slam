@@ -104,6 +104,7 @@ Parameters, with defaults:
 | `occlusion_window`, `occlusion_tol` | 9, 0.1 | `zbuffer`: window in px and tolerance in m |
 | `occlusion_link`, `occlusion_radius`, `occlusion_behind` | 0.1, 15, 0.3 | `mask`: 3D link in m, image radius in px, depth behind the object in m |
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
+| `point_classes`, `point_class_names` | `[]`, `[]` | classes positioned in the map as points (median of their mask points, matched within `point_match_radius`, 1.0 m); never sent to DPS-SLAM. They show in `/axial/landmark_map` with negative `landmark` ids and as `point_landmarks` markers |
 | `min_points` | 5 | smallest cluster |
 | `split_method` | `ransac` | `none`, `ransac`, `pearl`, `jlinkage`, `mst_dp` (`split_methods()` in `src/segments.cpp`) |
 | `split_tol` | `[0.07, 0.25, 0.3]` | point-to-line tolerance in m per class of `axial_classes` |

@@ -67,7 +67,8 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   landmarks_(
     declare_parameter<double>("map_spawn_threshold", 0.5), declare_parameter<double>("map_min_separation", 1.0),
     declare_parameter<double>("map_max_angle", 0.35), declare_parameter<double>("map_voxel", 0.03),
-    declare_parameter<double>("map_min_elongation", 3.0))
+    declare_parameter<double>("map_min_elongation", 3.0)),
+  points_(declare_parameter<double>("point_match_radius", 1.0), get_parameter("map_voxel").as_double())
 {
   const auto labels_topic = declare_parameter<std::string>("labels_topic", "labels_map");
   const auto cloud_topic = declare_parameter<std::string>("cloud_topic", "points");
@@ -86,6 +87,8 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   const auto classes = declare_parameter<std::vector<int64_t>>("axial_classes", {4, 6, 8});
   const auto class_names = declare_parameter<std::vector<std::string>>("class_names", {"pipe", "duct", "pillar"});
   const auto class_radius = declare_parameter<std::vector<double>>("class_radius", {0.0});
+  const auto point_classes = declare_parameter<std::vector<int64_t>>("point_classes", std::vector<int64_t>{});
+  const auto point_names = declare_parameter<std::vector<std::string>>("point_class_names", std::vector<std::string>{});
   projector_.min_points = static_cast<int>(declare_parameter<int64_t>("min_points", 5));
   split_method_ = declare_parameter<std::string>("split_method", "ransac");
   const auto split_tol = declare_parameter<std::vector<double>>("split_tol", {0.07, 0.25, 0.3});
@@ -110,8 +113,16 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   if (split_tol.size() < classes.size() || split_gap.size() < classes.size()) {
     throw std::invalid_argument("split_tol and split_gap need one value per axial class");
   }
+  for (const auto c : point_classes) {
+    if (std::find(classes.begin(), classes.end(), c) != classes.end()) {
+      throw std::invalid_argument("class " + std::to_string(c) + " is in both axial_classes and point_classes");
+    }
+  }
+  axial_classes_.assign(classes.begin(), classes.end());
   projector_.classes.assign(classes.begin(), classes.end());
+  projector_.classes.insert(projector_.classes.end(), point_classes.begin(), point_classes.end());
   names_ = zip(classes, class_names);
+  names_.merge(zip(point_classes, point_names));
   radius_ = zip(classes, class_radius);
   tols_ = zip(classes, split_tol);
   gaps_ = zip(classes, split_gap);
@@ -245,7 +256,18 @@ void AxialFrontend::process(const Image & msg, const std::string & frame, const 
   const InstanceImage img = decode_gz_instance(msg.data, static_cast<int>(msg.height), static_cast<int>(msg.width),
       msg.step);
   const MaskPoints mp = mask_points(pts, img, *K_, projector_);
-  const Labelled & l = mp.labelled;
+  // axial classes go to the line map and DPS-SLAM, point classes only to the point map
+  Labelled l, lp;
+  for (size_t i = 0; i < mp.labelled.idx.size(); ++i) {
+    const int c = mp.labelled.cls[i];
+    Labelled & dst = std::find(axial_classes_.begin(), axial_classes_.end(), c) != axial_classes_.end() ? l : lp;
+    dst.idx.push_back(mp.labelled.idx[i]);
+    dst.cls.push_back(c);
+    dst.seg.push_back(mp.labelled.seg[i]);
+  }
+  if (!lp.idx.empty()) {
+    points_.update(to_map.apply(select(odom, lp.idx)), lp.cls, lp.seg);
+  }
   const Cloud kept = select(pts, l.idx);
   const auto split_start = std::chrono::steady_clock::now();
   const Labels line = split_clusters(kept, l.cls, l.seg, split_method_, tols_, split_min_points_, gaps_,
@@ -347,7 +369,8 @@ void AxialFrontend::on_optimized(const Detections::ConstSharedPtr & msg)
 void AxialFrontend::publish_map()
 {
   const auto & lms = landmarks_.landmarks();
-  if (lms.empty()) {
+  const auto & pls = points_.landmarks();
+  if (lms.empty() && pls.empty()) {
     return;
   }
   std_msgs::msg::Header header;
@@ -366,6 +389,15 @@ void AxialFrontend::publish_map()
       for (Eigen::Index i = 0; i < pts.cols(); ++i) {
         data.insert(data.end(), {static_cast<float>(pts(0, i)), static_cast<float>(pts(1, i)),
           static_cast<float>(pts(2, i)), static_cast<float>(lm.class_id), static_cast<float>(gid), packed});
+      }
+    }
+    // point landmarks carry negative ids
+    for (const auto & [gid, lm] : pls) {
+      const auto rgb = colour(gid);
+      const float packed = pack_rgb(rgb[0], rgb[1], rgb[2]);
+      for (Eigen::Index i = 0; i < lm.points.cols(); ++i) {
+        data.insert(data.end(), {static_cast<float>(lm.points(0, i)), static_cast<float>(lm.points(1, i)),
+          static_cast<float>(lm.points(2, i)), static_cast<float>(lm.class_id), static_cast<float>(-gid), packed});
       }
     }
     pub_map_->publish(float_cloud({"x", "y", "z", "class_id", "landmark", "rgb"}, data, header));
@@ -397,6 +429,32 @@ void AxialFrontend::publish_map()
       label.pose.position.z += 0.2;
       label.scale.z = 0.25;
       for (auto * m : {&axis, &label}) {
+        m->id = gid;
+        m->action = visualization_msgs::msg::Marker::ADD;
+        m->header = header;
+        m->pose.orientation.w = 1.0;
+        m->color.r = static_cast<float>(rgb[0] / 255.0);
+        m->color.g = static_cast<float>(rgb[1] / 255.0);
+        m->color.b = static_cast<float>(rgb[2] / 255.0);
+        m->color.a = 1.0f;
+        out.markers.push_back(*m);
+      }
+    }
+    for (const auto & [gid, lm] : pls) {
+      const auto rgb = colour(gid);
+      visualization_msgs::msg::Marker dot;
+      dot.ns = "point_landmarks";
+      dot.type = visualization_msgs::msg::Marker::SPHERE;
+      dot.pose.position = point(lm.point);
+      dot.scale.x = dot.scale.y = dot.scale.z = 0.25;
+      visualization_msgs::msg::Marker label;
+      label.ns = "point_labels";
+      label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+      label.text = name_of(lm.class_id) + " " + std::to_string(gid) + " (" + std::to_string(lm.hits) + ")";
+      label.pose.position = point(lm.point);
+      label.pose.position.z += 0.35;
+      label.scale.z = 0.25;
+      for (auto * m : {&dot, &label}) {
         m->id = gid;
         m->action = visualization_msgs::msg::Marker::ADD;
         m->header = header;
