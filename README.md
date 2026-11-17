@@ -119,4 +119,12 @@ ros2 launch axial_perception axial_frontend.launch.py params_file:=<yaml> [rviz:
 
 `rviz:=true` opens `rviz/axial_frontend.rviz` (clusters, labels and overlay) with `fixed_frame` (default `odom`) as the fixed frame.
 
+Both nodes from one params file, with `axial_segmentation` started only when `axial_frontend`'s `labels_topic` is its
+output (`labels_topic:=` overrides it, e.g. to run on ground-truth masks; `detections_topic:=` remaps
+`/axial/line_detections`):
+
+```bash
+ros2 launch axial_perception axial_slam.launch.py params_file:=<yaml> [labels_topic:=<topic>] [detections_topic:=<topic>] [use_sim_time:=true]
+```
+
 The node logs the input and kept point counts, masks, lines and the split and processing times every 5 s.
