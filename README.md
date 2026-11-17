@@ -2,6 +2,47 @@
 
 Camera-LiDAR fusion for axial landmarks (pipes, ducts, pillars) as 4-DoF infinite lines for DPS-SLAM.
 
+## axial_segmentation
+
+YOLO instance segmentation (ultralytics seg model exported to ONNX with `nms=False`) run with ONNX Runtime. It
+publishes the `labels_map` that `axial_frontend` reads, so the same front end runs on Gazebo ground truth or on
+the model, on simulated or real images.
+
+The class table is the node's `class_ids`, `class_names` and `class_geometry` (`axis` or `point`): YOLO output `i`
+is `class_names[i]` and is written to `labels_map` as `class_ids[i]`. The node refuses a model whose `names`
+metadata differs from `class_names`. Overlapping masks go to the higher score; instance ids count from 1 per
+class by score.
+
+| Topic | Type | |
+|---|---|---|
+| `image_topic` | `sensor_msgs/Image` or `CompressedImage` (name ending in `/compressed`) | camera |
+| `labels_topic` | `sensor_msgs/Image` | rgb8 `labels_map`, same header as the image |
+| `detections_topic` | `vision_msgs/Detection2DArray` | box, class name and score per instance |
+| `overlay_topic` | `sensor_msgs/Image` | masks over the image, only when subscribed (`""` disables) |
+
+Other parameters:
+- `model_path`: a file, or `package://<package>/<path>` inside an installed package's share directory. The
+  default is the model shipped in `models/`.
+- `device`: `cuda` (default) runs ONNX Runtime's CUDA provider and falls back to `cpu` with a warning when it
+  cannot load; the startup log names the one in use.
+- `conf` (0.4), `iou` (0.6), `max_det` (100).
+- `threads` (4): CPU threads, which sleep when idle.
+- `max_rate_hz` (10): images closer in stamp are skipped, as in `axial_frontend`; 0 takes every image.
+- `image_reliable` (false): best-effort image subscription.
+
+Only the newest image is kept while the model runs.
+
+`models/sherec_seg_sim_p2b_n.onnx` is a yolo11n-seg at 640 px for pillar, pipe, duct, fire_extinguisher and door
+(class ids 8, 4, 6, 9, 10 in the sherec sim). It was trained in pillar-perception-ws on images of randomized sherec
+worlds (layout, colours per pillar, lighting, Gazebo Fuel doors and extinguishers) and scores, on worlds held out
+from training, mask mAP50-95 0.65 for pillars with 0.1% of pillars taken for doors. It runs in about 10 ms per
+image on an RTX 4070 laptop GPU.
+
+`seg_infer <model.onnx> <out_dir> <image>...` runs the same code on image files (labels PNGs, detections, timing);
+on the CPU its output matches ultralytics `predict(retina_masks=True)` on the same ONNX model. ONNX Runtime is found
+under `ONNXRUNTIME_ROOT` (default `/opt/onnxruntime`; the project Dockerfile installs the GPU build, which needs CUDA 12
+and cuDNN 9 on the library path).
+
 ## axial_perception
 
 `axial_frontend` turns instance masks and a LiDAR cloud into one point cluster per mask:
