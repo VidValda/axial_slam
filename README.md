@@ -97,6 +97,7 @@ Parameters, with defaults:
 | Parameter | Default | |
 |---|---|---|
 | `camera_frame` | mask image frame | optical frame (x right, y down, z forward) to project in |
+| `lidar_frame` | cloud frame | frame the cloud is read in, to take the LiDAR from another TF branch |
 | `odom_frame` | `odom` | frame the scans are accumulated in |
 | `n_scans` | 5 | scans kept |
 | `depth_min`, `depth_max` | 0.1, 30.0 | depth range in m |

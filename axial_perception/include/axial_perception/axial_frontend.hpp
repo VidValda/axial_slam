@@ -44,6 +44,7 @@ protected:
 
   std::string odom_frame_;
   std::string camera_frame_;
+  std::string lidar_frame_;
   std::string map_frame_;
   ProjectorParams projector_;
   std::optional<Intrinsics> K_;

@@ -75,6 +75,7 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   const auto camera_info_topic = declare_parameter<std::string>("camera_info_topic", "camera_info");
   const auto image_topic = declare_parameter<std::string>("image_topic", "image_raw");
   camera_frame_ = declare_parameter<std::string>("camera_frame", "");
+  lidar_frame_ = declare_parameter<std::string>("lidar_frame", "");
   odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
   projector_.depth_min = declare_parameter<double>("depth_min", 0.1);
   projector_.depth_max = declare_parameter<double>("depth_max", 30.0);
@@ -211,7 +212,8 @@ void AxialFrontend::flush_scans()
 {
   while (!pending_scans_.empty()) {
     const PointCloud2::ConstSharedPtr msg = pending_scans_.front();
-    const auto tf = lookup(odom_frame_, msg->header.frame_id, msg->header.stamp);
+    const auto tf = lookup(odom_frame_, lidar_frame_.empty() ? msg->header.frame_id : lidar_frame_,
+      msg->header.stamp);
     if (!tf) {
       return;
     }
