@@ -172,6 +172,50 @@ TEST(Occlusion, SurfaceMaskDropsAPieceInFrontAwayFromTheSurface)
   EXPECT_TRUE(none(keep, 60, 72));
 }
 
+TEST(Occlusion, SurfaceMaskLocalClassKeepsAThinPipeOverTheWallBehind)
+{
+  const Cloud pts = stack(
+    columns(linspace(-0.3, 0.3, 15), Eigen::VectorXd::Zero(15), Eigen::VectorXd::Constant(15, 2.0)),
+    columns(linspace(-0.35, 0.35, 60), Eigen::VectorXd::Constant(60, 0.02), Eigen::VectorXd::Constant(60, 2.4)));
+  auto f = mask_frame(pts, 1);
+  for (size_t j = 0; j < f.img.mask.size(); ++j) {
+    f.img.cls[j] = f.img.mask[j] ? 4 : 0;
+  }
+  const auto largest = surface_mask(f.u, f.v, pts, f.img, 0.1, 15, 0.3);
+  EXPECT_TRUE(all(largest, 15, 75));
+  const auto local = surface_mask(f.u, f.v, pts, f.img, 0.1, 15, 0.3, 10, {4});
+  EXPECT_TRUE(all(local, 0, 15));
+  EXPECT_TRUE(none(local, 15, 75));
+  EXPECT_TRUE(all(surface_mask(f.u, f.v, pts, f.img, 0.1, 15, 0.3, 10, {8}), 15, 75));
+}
+
+TEST(Occlusion, SurfaceMaskLocalClassKeepsAPipeWithFewerThanMinPoints)
+{
+  const Cloud pts = stack(
+    columns(linspace(-0.04, 0.04, 5), Eigen::VectorXd::Zero(5), Eigen::VectorXd::Constant(5, 2.0)),
+    columns(linspace(-0.35, 0.35, 60), Eigen::VectorXd::Constant(60, 0.02), Eigen::VectorXd::Constant(60, 3.5)));
+  auto f = mask_frame(pts, 1);
+  for (size_t j = 0; j < f.img.mask.size(); ++j) {
+    f.img.cls[j] = f.img.mask[j] ? 4 : 0;
+  }
+  const auto keep = surface_mask(f.u, f.v, pts, f.img, 0.1, 15, 0.3, 10, {4});
+  EXPECT_TRUE(all(keep, 0, 5));
+  EXPECT_TRUE(none(keep, 5, 65));
+}
+
+TEST(Occlusion, SurfaceMaskLocalClassKeepsASeparatePieceAtTheSameDepth)
+{
+  const Eigen::VectorXd x = linspace(-0.4, -0.1, 30);
+  const Cloud pts = stack(
+    columns(x, Eigen::VectorXd::Zero(30), Eigen::VectorXd::Constant(30, 2.0)),
+    columns(-x.head(20), Eigen::VectorXd::Zero(20), Eigen::VectorXd::Constant(20, 2.05)));
+  auto f = mask_frame(pts, 1);
+  for (size_t j = 0; j < f.img.mask.size(); ++j) {
+    f.img.cls[j] = f.img.mask[j] ? 4 : 0;
+  }
+  EXPECT_TRUE(all(surface_mask(f.u, f.v, pts, f.img, 0.1, 15, 0.3, 10, {4}), 0, 50));
+}
+
 TEST(Occlusion, Median)
 {
   EXPECT_DOUBLE_EQ(axial_perception::median({3.0, 1.0, 2.0}), 2.0);

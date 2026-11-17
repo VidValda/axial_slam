@@ -20,6 +20,7 @@ struct ProjectorParams
   double occlusion_link = 0.1;
   double occlusion_radius = 15.0;
   double occlusion_behind = 0.3;
+  std::vector<int> occlusion_local_classes;
   std::vector<int> classes{4, 6, 8};
   int min_points = 5;
 };

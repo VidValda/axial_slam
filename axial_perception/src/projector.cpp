@@ -39,7 +39,7 @@ MaskPoints mask_points(
     out.proj = out.proj.select(
       surface_mask(
         out.proj.u, out.proj.v, select(pts, out.proj.idx), img, p.occlusion_link, p.occlusion_radius,
-        p.occlusion_behind));
+        p.occlusion_behind, 10, p.occlusion_local_classes));
   }
   out.labelled = label_points(out.proj, img, p.classes, p.min_points);
   return out;

@@ -85,6 +85,9 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   projector_.occlusion_link = declare_parameter<double>("occlusion_link", 0.1);
   projector_.occlusion_radius = static_cast<double>(declare_parameter<int64_t>("occlusion_radius", 15));
   projector_.occlusion_behind = declare_parameter<double>("occlusion_behind", 0.3);
+  for (const auto c : declare_parameter<std::vector<int64_t>>("occlusion_local_classes", std::vector<int64_t>{})) {
+    projector_.occlusion_local_classes.push_back(static_cast<int>(c));
+  }
   const auto classes = declare_parameter<std::vector<int64_t>>("axial_classes", {4, 6, 8});
   const auto class_names = declare_parameter<std::vector<std::string>>("class_names", {"pipe", "duct", "pillar"});
   const auto class_radius = declare_parameter<std::vector<double>>("class_radius", {0.0});

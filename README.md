@@ -55,6 +55,9 @@ and cuDNN 9 on the library path).
    - `mask`: per mask, points are grouped by linking them in 3D within `occlusion_link`. The largest group is the
      object; other groups are dropped when they lie more than `occlusion_behind` behind it within `occlusion_radius`
      pixels (background seen through the mask). Keeps more of slanted and receding pipes than `zbuffer`.
+     For `occlusion_local_classes`, thin objects whose few points can be outnumbered by the background, a group is
+     dropped instead when most of its points lie more than `occlusion_behind` behind a point of another group within
+     `occlusion_radius` pixels.
    - `none`.
 4. Points on masks of `axial_classes` are kept; masks with fewer than `min_points` hits are dropped.
 5. Each mask is split into straight lines with `split_method` (`src/segments.cpp`). `ransac` fits lines one after
@@ -104,6 +107,7 @@ Parameters, with defaults:
 | `occlusion_method` | `zbuffer` | `zbuffer`, `mask` or `none` |
 | `occlusion_window`, `occlusion_tol` | 9, 0.1 | `zbuffer`: window in px and tolerance in m |
 | `occlusion_link`, `occlusion_radius`, `occlusion_behind` | 0.1, 15, 0.3 | `mask`: 3D link in m, image radius in px, depth behind the object in m |
+| `occlusion_local_classes` | `[]` | `mask`: classes whose groups are checked against each other instead of against the largest |
 | `axial_classes`, `class_names` | `[4, 6, 8]`, `[pipe, duct, pillar]` | classes kept, and their names for the labels |
 | `slam_classes` | `[]` | axial classes whose lines go to DPS-SLAM; empty sends them all. The others stay in the landmark map only |
 | `point_classes`, `point_class_names` | `[]`, `[]` | classes positioned in the map as points (median of their mask points, matched within `point_match_radius`, 1.0 m); never sent to DPS-SLAM. They show in `/axial/landmark_map` with negative `landmark` ids and as `point_landmarks` markers |

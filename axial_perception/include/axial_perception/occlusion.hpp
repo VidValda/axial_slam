@@ -14,7 +14,8 @@ std::vector<bool> front_mask(
 
 std::vector<bool> surface_mask(
   const std::vector<int> & u, const std::vector<int> & v, const Cloud & xyz,
-  const InstanceImage & img, double link, double radius, double behind, int min_points = 10);
+  const InstanceImage & img, double link, double radius, double behind, int min_points = 10,
+  const std::vector<int> & local_classes = {});
 
 double median(std::vector<double> x);
 

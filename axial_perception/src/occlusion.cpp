@@ -57,6 +57,8 @@ std::vector<int> components(const Cloud & pts, double link)
   return label;
 }
 
+constexpr int kLocalMinPoints = 3;
+
 }  // namespace
 
 double median(std::vector<double> x)
@@ -109,9 +111,81 @@ std::vector<bool> front_mask(
   return keep;
 }
 
+namespace
+{
+
+std::vector<bool> against_largest(
+  const std::vector<int> & u, const std::vector<int> & v, const Indices & i, const Cloud & pts,
+  const std::vector<int> & lab, const std::vector<int> & size, double radius, double behind, int min_points)
+{
+  const size_t n = i.size();
+  const int largest = *std::max_element(size.begin(), size.end());
+  const int top = static_cast<int>(std::find(size.begin(), size.end(), largest) - size.begin());
+  Indices top_idx;
+  for (size_t j = 0; j < n; ++j) {
+    if (lab[j] == top) {
+      top_idx.push_back(static_cast<int>(j));
+    }
+  }
+  Eigen::Matrix2Xd top_uv(2, static_cast<Eigen::Index>(top_idx.size()));
+  for (size_t t = 0; t < top_idx.size(); ++t) {
+    const int j = i[static_cast<size_t>(top_idx[t])];
+    top_uv.col(static_cast<Eigen::Index>(t)) << u[static_cast<size_t>(j)], v[static_cast<size_t>(j)];
+  }
+  KdTree<2> tree(std::move(top_uv));
+
+  std::vector<std::vector<double>> dz(size.size());
+  std::vector<std::vector<double>> front(size.size());
+  for (size_t j = 0; j < n; ++j) {
+    const size_t p = static_cast<size_t>(i[j]);
+    const auto [k, d] = tree.nearest(Eigen::Vector2d(u[p], v[p]));
+    const double diff = pts(2, static_cast<Eigen::Index>(j)) - pts(2, top_idx[static_cast<size_t>(k)]);
+    front[static_cast<size_t>(lab[j])].push_back(diff);
+    if (d < radius) {
+      dz[static_cast<size_t>(lab[j])].push_back(diff);
+    }
+  }
+  std::vector<bool> good(size.size());
+  for (size_t c = 0; c < size.size(); ++c) {
+    good[c] = size[c] == largest || (size[c] >= min_points &&
+      (dz[c].empty() || median(dz[c]) < behind) && median(front[c]) > -behind);
+  }
+  return good;
+}
+
+std::vector<bool> local_front(
+  const std::vector<int> & u, const std::vector<int> & v, const Indices & i, const Cloud & pts,
+  const std::vector<int> & lab, const std::vector<int> & size, double radius, double behind)
+{
+  const size_t n = i.size();
+  Eigen::Matrix2Xd uv(2, static_cast<Eigen::Index>(n));
+  for (size_t j = 0; j < n; ++j) {
+    const size_t p = static_cast<size_t>(i[j]);
+    uv.col(static_cast<Eigen::Index>(j)) << u[p], v[p];
+  }
+  const KdTree<2> tree(uv);
+  std::vector<int> hidden(size.size(), 0);
+  for (size_t j = 0; j < n; ++j) {
+    const double z = pts(2, static_cast<Eigen::Index>(j));
+    bool behind_other = false;
+    tree.visit_within(uv.col(static_cast<Eigen::Index>(j)), radius, [&](int k) {
+        behind_other = behind_other || (lab[static_cast<size_t>(k)] != lab[j] && z - pts(2, k) > behind);
+      });
+    hidden[static_cast<size_t>(lab[j])] += behind_other;
+  }
+  std::vector<bool> good(size.size());
+  for (size_t c = 0; c < size.size(); ++c) {
+    good[c] = size[c] >= kLocalMinPoints && 2 * hidden[c] <= size[c];
+  }
+  return good;
+}
+
+}  // namespace
+
 std::vector<bool> surface_mask(
   const std::vector<int> & u, const std::vector<int> & v, const Cloud & xyz,
-  const InstanceImage & img, double link, double radius, double behind, int min_points)
+  const InstanceImage & img, double link, double radius, double behind, int min_points,
+  const std::vector<int> & local_classes)
 {
   std::map<int32_t, Indices> by_mask;
   for (size_t j = 0; j < u.size(); ++j) {
@@ -119,48 +193,18 @@ std::vector<bool> surface_mask(
   }
   std::vector<bool> keep(u.size(), false);
   for (const auto & [mask, i] : by_mask) {
-    const size_t n = i.size();
     const Cloud pts = select(xyz, i);
     const std::vector<int> lab = components(pts, link);
     std::vector<int> size(static_cast<size_t>(*std::max_element(lab.begin(), lab.end())) + 1, 0);
     for (int l : lab) {
       ++size[static_cast<size_t>(l)];
     }
-    const int largest = *std::max_element(size.begin(), size.end());
-    const int top = static_cast<int>(std::find(size.begin(), size.end(), largest) - size.begin());
-
-    Indices top_idx;
-    for (size_t j = 0; j < n; ++j) {
-      if (lab[j] == top) {
-        top_idx.push_back(static_cast<int>(j));
-      }
-    }
-    Eigen::Matrix2Xd top_uv(2, static_cast<Eigen::Index>(top_idx.size()));
-    for (size_t t = 0; t < top_idx.size(); ++t) {
-      const int j = i[static_cast<size_t>(top_idx[t])];
-      top_uv.col(static_cast<Eigen::Index>(t)) << u[static_cast<size_t>(j)], v[static_cast<size_t>(j)];
-    }
-    KdTree<2> tree(std::move(top_uv));
-
-    std::vector<std::vector<double>> dz(size.size());
-    std::vector<std::vector<double>> front(size.size());
-    for (size_t j = 0; j < n; ++j) {
-      const size_t p = static_cast<size_t>(i[j]);
-      const auto [k, d] = tree.nearest(Eigen::Vector2d(u[p], v[p]));
-      const double diff = pts(2, static_cast<Eigen::Index>(j)) -
-        pts(2, top_idx[static_cast<size_t>(k)]);
-      front[static_cast<size_t>(lab[j])].push_back(diff);
-      if (d < radius) {
-        dz[static_cast<size_t>(lab[j])].push_back(diff);
-      }
-    }
-
-    std::vector<bool> good(size.size());
-    for (size_t c = 0; c < size.size(); ++c) {
-      good[c] = size[c] == largest || (size[c] >= min_points &&
-        (dz[c].empty() || median(dz[c]) < behind) && median(front[c]) > -behind);
-    }
-    for (size_t j = 0; j < n; ++j) {
+    const size_t p0 = static_cast<size_t>(i.front());
+    const int cls = img.class_at(u[p0], v[p0]);
+    const auto good = std::find(local_classes.begin(), local_classes.end(), cls) != local_classes.end() ?
+      local_front(u, v, i, pts, lab, size, radius, behind) :
+      against_largest(u, v, i, pts, lab, size, radius, behind, min_points);
+    for (size_t j = 0; j < i.size(); ++j) {
       if (good[static_cast<size_t>(lab[j])]) {
         keep[static_cast<size_t>(i[j])] = true;
       }
