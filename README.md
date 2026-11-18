@@ -119,6 +119,9 @@ Parameters, with defaults:
 | `max_rate_hz` | 10.0 | mask images processed per second of stamp time |
 | `map_spawn_threshold`, `map_min_separation` | 0.5, 1.0 | landmark map: perpendicular distance in m that matches a landmark, and below which no new one spawns |
 | `class_spawn_threshold`, `class_min_separation` | `[]`, `[]` | the same per class of `axial_classes`, for lines closer together than pillars, like pipe bundles |
+| `round_classes` | `[]` | classes with a round cross-section: points behind the front surface by more than the radius + `round_tol` (0.05) dropped, and the axis fitted to the seen arc, points off the circle by more than `arc_trim` (0.05) left out |
+| `round_min_width` | 0.0 | round lines narrower across than this times the radius are dropped (a strip of ceiling inside a duct mask) |
+| `axis_method` | `radius` | `radius`: the axis `class_radius` behind the surface; `learned`: each landmark fits its radius to the cross-section of its points seen within `radius_max_range` (5.0 m), fixed once the inliers (`radius_fit_band`, 0.02 m) span `radius_min_span_deg` (100); until then the median of its class |
 
 ```bash
 ros2 launch axial_perception axial_frontend.launch.py params_file:=<yaml> [rviz:=true fixed_frame:=<frame>] [use_sim_time:=true]

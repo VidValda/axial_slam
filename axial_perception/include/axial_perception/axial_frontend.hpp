@@ -82,7 +82,12 @@ private:
   std::string split_method_;
   std::map<int, double> tols_;
   std::map<int, double> gaps_;
+  std::string axis_method_;
   std::map<int, double> radius_;
+  std::vector<int> round_classes_;
+  double round_tol_;
+  double round_min_width_;
+  double arc_trim_;
   std::map<int, std::string> names_;
   int split_min_points_;
   double split_min_length_;

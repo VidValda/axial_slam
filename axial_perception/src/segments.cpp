@@ -1,11 +1,14 @@
 #include "axial_perception/segments.hpp"
+#include "axial_perception/occlusion.hpp"
 
 #include <Eigen/Eigenvalues>
+#include <Eigen/Geometry>
 
 #include <algorithm>
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -181,6 +184,282 @@ Eigen::Vector3d axis_from_surface(const Eigen::Vector3d & c, const Eigen::Vector
   return radius > 0 && n > 0 ? Eigen::Vector3d(c + radius * a / n) : c;
 }
 
+namespace
+{
+
+std::optional<Eigen::Vector2d> fit_centre(
+  const Eigen::Matrix2Xd & q, const std::vector<bool> & keep, double radius, Eigen::Vector2d x)
+{
+  for (int it = 0; it < 20; ++it) {
+    Eigen::Matrix2d jtj = Eigen::Matrix2d::Zero();
+    Eigen::Vector2d jtr = Eigen::Vector2d::Zero();
+    for (Eigen::Index j = 0; j < q.cols(); ++j) {
+      const Eigen::Vector2d v = x - q.col(j);
+      const double n = v.norm();
+      if (!keep[static_cast<size_t>(j)] || n < 1e-9) {
+        continue;
+      }
+      const Eigen::Vector2d g = v / n;
+      jtj += g * g.transpose();
+      jtr += g * (n - radius);
+    }
+    if (std::abs(jtj.determinant()) < 1e-12) {
+      return std::nullopt;
+    }
+    const Eigen::Vector2d step = jtj.ldlt().solve(jtr);
+    x -= step;
+    if (step.norm() < 1e-6) {
+      break;
+    }
+  }
+  return x.allFinite() ? std::optional<Eigen::Vector2d>(x) : std::nullopt;
+}
+
+std::optional<std::pair<Eigen::Vector2d, double>> circumcircle(
+  const Eigen::Vector2d & a, const Eigen::Vector2d & b, const Eigen::Vector2d & c)
+{
+  const double d = 2 * (a.x() * (b.y() - c.y()) + b.x() * (c.y() - a.y()) + c.x() * (a.y() - b.y()));
+  if (std::abs(d) < 1e-12) {
+    return std::nullopt;
+  }
+  const double a2 = a.squaredNorm(), b2 = b.squaredNorm(), c2 = c.squaredNorm();
+  const Eigen::Vector2d o(
+    (a2 * (b.y() - c.y()) + b2 * (c.y() - a.y()) + c2 * (a.y() - b.y())) / d,
+    (a2 * (c.x() - b.x()) + b2 * (a.x() - c.x()) + c2 * (b.x() - a.x())) / d);
+  return std::make_pair(o, (a - o).norm());
+}
+
+bool refine_circle(const Eigen::Matrix2Xd & q, const std::vector<bool> & keep, Eigen::Vector2d & c, double & r)
+{
+  for (int it = 0; it < 20; ++it) {
+    Eigen::Matrix3d jtj = Eigen::Matrix3d::Zero();
+    Eigen::Vector3d jtr = Eigen::Vector3d::Zero();
+    for (Eigen::Index j = 0; j < q.cols(); ++j) {
+      const Eigen::Vector2d v = c - q.col(j);
+      const double n = v.norm();
+      if (!keep[static_cast<size_t>(j)] || n < 1e-9) {
+        continue;
+      }
+      const Eigen::Vector3d g(v.x() / n, v.y() / n, -1.0);
+      jtj += g * g.transpose();
+      jtr += g * (n - r);
+    }
+    if (std::abs(jtj.determinant()) < 1e-15) {
+      return false;
+    }
+    const Eigen::Vector3d step = jtj.ldlt().solve(jtr);
+    c -= step.head<2>();
+    r -= step.z();
+    if (step.norm() < 1e-7) {
+      break;
+    }
+  }
+  return c.allFinite() && std::isfinite(r) && r > 0;
+}
+
+}  // namespace
+
+Eigen::Vector3d axis_from_arc(const Cloud & pts, const Line & line, double radius, double trim)
+{
+  const Eigen::Vector3d fallback = axis_from_surface(line.c, line.d, radius);
+  Eigen::Vector3d to_cam = -(line.c - line.c.dot(line.d) * line.d);
+  if (radius <= 0 || pts.cols() < 3 || to_cam.norm() < 1e-9) {
+    return fallback;
+  }
+  to_cam.normalize();
+  const Eigen::Vector3d side = line.d.cross(to_cam);
+  Eigen::Matrix2Xd q(2, pts.cols());
+  q.row(0) = side.transpose() * (pts.colwise() - line.c);
+  q.row(1) = to_cam.transpose() * (pts.colwise() - line.c);
+  const Eigen::Vector2d start(0.0, -radius);
+  std::vector<bool> keep(static_cast<size_t>(q.cols()), true);
+  Eigen::Vector2d seed = start;
+  if (trim > 0) {
+    const auto inliers = [&](const Eigen::Vector2d & c) {
+        return (((q.colwise() - c).colwise().norm().array() - radius).abs() < trim).count();
+      };
+    const Eigen::Index stride = std::max<Eigen::Index>(1, q.cols() / 40);
+    Eigen::Index best = inliers(seed);
+    for (Eigen::Index i = 0; i < q.cols(); i += stride) {
+      for (Eigen::Index j = i + stride; j < q.cols(); j += stride) {
+        const Eigen::Vector2d m = (q.col(i) + q.col(j)) / 2;
+        const Eigen::Vector2d h = q.col(j) - q.col(i);
+        const double half = h.norm() / 2;
+        if (half < 0.2 * radius || half >= radius) {
+          continue;
+        }
+        Eigen::Vector2d n(-h.y(), h.x());
+        n /= n.norm();
+        if (n.y() > 0) {
+          n = -n;
+        }
+        const Eigen::Vector2d c = m + std::sqrt(radius * radius - half * half) * n;
+        const Eigen::Index k = inliers(c);
+        if (k > best) {
+          best = k;
+          seed = c;
+        }
+      }
+    }
+    for (Eigen::Index j = 0; j < q.cols(); ++j) {
+      keep[static_cast<size_t>(j)] = std::abs((q.col(j) - seed).norm() - radius) < trim;
+    }
+  }
+  auto x = fit_centre(q, keep, radius, seed);
+  for (int it = 0; x && trim > 0 && it < 5; ++it) {
+    std::vector<bool> next(keep.size());
+    size_t n = 0;
+    for (Eigen::Index j = 0; j < q.cols(); ++j) {
+      next[static_cast<size_t>(j)] = std::abs((q.col(j) - *x).norm() - radius) < trim;
+      n += next[static_cast<size_t>(j)];
+    }
+    if (n < 10 || next == keep) {
+      break;
+    }
+    keep = next;
+    x = fit_centre(q, keep, radius, *x);
+  }
+  if (!x || (*x - start).norm() > radius) {
+    return fallback;
+  }
+  return line.c + (*x)[0] * side + (*x)[1] * to_cam;
+}
+
+std::optional<Circle> fit_circle(const Eigen::Matrix2Xd & q, double band, int iterations, uint64_t seed)
+{
+  const Eigen::Index n = q.cols();
+  if (n < 10 || band <= 0) {
+    return std::nullopt;
+  }
+  const double extent = (q.rowwise().maxCoeff() - q.rowwise().minCoeff()).norm();
+  const auto inliers = [&](const Eigen::Vector2d & c, double r) {
+      return (((q.colwise() - c).colwise().norm().array() - r).abs() < band).count();
+    };
+  Rng rng(seed);
+  std::uniform_int_distribution<Eigen::Index> pick(0, n - 1);
+  Eigen::Vector2d c;
+  double r = 0.0;
+  Eigen::Index best = 0;
+  for (int it = 0; it < iterations; ++it) {
+    const auto circ = circumcircle(q.col(pick(rng)), q.col(pick(rng)), q.col(pick(rng)));
+    if (!circ || circ->second > extent) {
+      continue;
+    }
+    const Eigen::Index m = inliers(circ->first, circ->second);
+    if (m > best) {
+      best = m;
+      c = circ->first;
+      r = circ->second;
+    }
+  }
+  if (best < 10) {
+    return std::nullopt;
+  }
+  std::vector<bool> keep(static_cast<size_t>(n));
+  for (int it = 0; it < 5; ++it) {
+    std::vector<bool> next(keep.size());
+    for (Eigen::Index j = 0; j < n; ++j) {
+      next[static_cast<size_t>(j)] = std::abs((q.col(j) - c).norm() - r) < band;
+    }
+    if (std::count(next.begin(), next.end(), true) < 10) {
+      return std::nullopt;
+    }
+    if (next == keep) {
+      break;
+    }
+    keep = next;
+    if (!refine_circle(q, keep, c, r) || r > extent) {
+      return std::nullopt;
+    }
+  }
+  std::vector<double> angle;
+  for (Eigen::Index j = 0; j < n; ++j) {
+    if (keep[static_cast<size_t>(j)]) {
+      angle.push_back(std::atan2(q(1, j) - c.y(), q(0, j) - c.x()));
+    }
+  }
+  std::sort(angle.begin(), angle.end());
+  double gap = angle.front() + 2 * M_PI - angle.back();
+  for (size_t j = 1; j < angle.size(); ++j) {
+    gap = std::max(gap, angle[j] - angle[j - 1]);
+  }
+  Circle out;
+  out.centre = c;
+  out.radius = r;
+  out.span = 2 * M_PI - gap;
+  out.inliers = static_cast<int>(angle.size());
+  return out;
+}
+
+namespace
+{
+
+double quantile(std::vector<double> x, double p)
+{
+  const size_t k = std::min(x.size() - 1, static_cast<size_t>(p * static_cast<double>(x.size())));
+  std::nth_element(x.begin(), x.begin() + static_cast<std::ptrdiff_t>(k), x.end());
+  return x[k];
+}
+
+}  // namespace
+
+double seen_width(const Cloud & pts)
+{
+  const Line line = fit_line(pts);
+  const Eigen::Vector3d to_cam = -(line.c - line.c.dot(line.d) * line.d);
+  if (pts.cols() < 2 || to_cam.norm() < 1e-9) {
+    return 0.0;
+  }
+  const Eigen::Vector3d side = line.d.cross(to_cam).normalized();
+  std::vector<double> across(static_cast<size_t>(pts.cols()));
+  for (Eigen::Index j = 0; j < pts.cols(); ++j) {
+    across[static_cast<size_t>(j)] = (pts.col(j) - line.c).dot(side);
+  }
+  return quantile(across, 0.95) - quantile(across, 0.05);
+}
+
+Section section(const Cloud & pts, const Line & line, double tol, double trim)
+{
+  Section out;
+  out.axis = line.c;
+  Eigen::Vector3d to_cam = -(line.c - line.c.dot(line.d) * line.d);
+  if (pts.cols() < 3 || to_cam.norm() < 1e-9) {
+    return out;
+  }
+  out.to_cam = to_cam.normalized();
+  const Eigen::Vector3d side = line.d.cross(out.to_cam);
+  const Cloud r = pts.colwise() - line.c;
+  std::vector<double> across(static_cast<size_t>(pts.cols())), depth(across.size());
+  for (Eigen::Index j = 0; j < pts.cols(); ++j) {
+    across[static_cast<size_t>(j)] = r.col(j).dot(side);
+    depth[static_cast<size_t>(j)] = r.col(j).dot(out.to_cam);
+  }
+  out.front = quantile(depth, 1.0 - trim);
+  double band = tol;
+  double lo = 0.0, hi = 0.0;
+  for (int it = 0; it < 20; ++it) {
+    std::vector<double> in;
+    for (size_t j = 0; j < depth.size(); ++j) {
+      if (depth[j] >= out.front - band) {
+        in.push_back(across[j]);
+      }
+    }
+    const double a = quantile(in, trim), b = quantile(in, 1.0 - trim);
+    const double half = (b - a) / 2 / (1.0 - 2 * trim);
+    lo = (a + b) / 2 - half;
+    hi = (a + b) / 2 + half;
+    const double next = half + tol;
+    if (next <= band) {
+      break;
+    }
+    band = next;
+  }
+  out.width = hi - lo;
+  out.band = band;
+  out.axis = line.c + (lo + hi) / 2 * side + (out.front - out.width / 2) * out.to_cam;
+  return out;
+}
+
 Eigen::ArrayXd line_distance(const Cloud & pts, const Line & line)
 {
   const Cloud r = pts.colwise() - line.c;
@@ -269,6 +548,80 @@ Labels drop_short(const Cloud & pts, const Labels & labels, double min_length)
       ++n;
       for (int i : sel) {
         out[static_cast<size_t>(i)] = n;
+      }
+    }
+  }
+  return out;
+}
+
+Labels surface_filter(
+  const Cloud & pts, const std::vector<int> & cls, const std::vector<int> & seg, const Labels & labels,
+  const std::vector<int> & classes, double tol, double trim, int min_points, const std::map<int, double> & radius,
+  double min_width)
+{
+  struct Fit
+  {
+    int label;
+    int seg;
+    double half;
+    Line line;
+    Eigen::Vector3d to_cam;
+    Cloud pts;
+  };
+  Labels out = labels;
+  std::vector<Fit> fits;
+  for (const auto & [k, sel] : groups(labels)) {
+    const int c = cls[static_cast<size_t>(sel.front())];
+    if (std::find(classes.begin(), classes.end(), c) == classes.end()) {
+      continue;
+    }
+    const Cloud p = select(pts, sel);
+    const Line line = fit_line(p);
+    Section sec = section(p, line, tol, trim);
+    const auto r = radius.find(c);
+    const bool known = r != radius.end() && r->second > 0.0;
+    if (known) {
+      sec.width = 2 * r->second;
+      sec.band = r->second + tol;
+    }
+    if (sec.width <= 0.0) {
+      continue;
+    }
+    Indices kept;
+    for (size_t j = 0; j < sel.size(); ++j) {
+      if ((p.col(static_cast<Eigen::Index>(j)) - line.c).dot(sec.to_cam) < sec.front - sec.band) {
+        out[static_cast<size_t>(sel[j])] = 0;
+      } else {
+        kept.push_back(sel[j]);
+      }
+    }
+    const bool narrow = known && min_width > 0.0 && !kept.empty() &&
+      seen_width(select(pts, kept)) < min_width * r->second;
+    if (static_cast<int>(kept.size()) < min_points || narrow) {
+      for (int i : kept) {
+        out[static_cast<size_t>(i)] = 0;
+      }
+      continue;
+    }
+    const Cloud surface = select(pts, kept);
+    fits.push_back({k, seg[static_cast<size_t>(sel.front())], sec.width / 2, fit_line(surface), sec.to_cam, surface});
+  }
+  for (const Fit & back : fits) {
+    for (const Fit & front : fits) {
+      if (&back == &front || back.seg != front.seg || std::abs(back.line.d.dot(front.line.d)) < 0.98) {
+        continue;
+      }
+      const Eigen::VectorXd tf = front.line.d.transpose() * (front.pts.colwise() - front.line.c);
+      const Eigen::VectorXd tb = front.line.d.transpose() * (back.pts.colwise() - front.line.c);
+      std::vector<double> depth;
+      for (Eigen::Index j = 0; j < tb.size(); ++j) {
+        if (tb[j] >= tf.minCoeff() && tb[j] <= tf.maxCoeff()) {
+          depth.push_back((back.pts.col(j) - front.line.c).dot(front.to_cam));
+        }
+      }
+      if (2 * depth.size() >= static_cast<size_t>(tb.size()) && median(depth) < -(front.half + tol)) {
+        std::replace(out.begin(), out.end(), back.label, 0);
+        break;
       }
     }
   }

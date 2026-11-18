@@ -226,3 +226,120 @@ TEST(Landmarks, RotationTakesAOntoB)
   EXPECT_LT((axial_perception::rotation(a, b) * a - b).norm(), 1e-12);
   EXPECT_TRUE(axial_perception::rotation(a, -a).isIdentity());
 }
+
+namespace
+{
+
+Cloud pillar_view(double r, double from, double to)
+{
+  std::vector<Eigen::Vector3d> pts;
+  for (double z = 0.0; z <= 2.0; z += 0.03) {
+    for (double a = from; a <= to; a += 0.03) {
+      pts.emplace_back(3.0 + r * std::cos(a), 1.0 + r * std::sin(a), z);
+    }
+  }
+  Cloud out(3, static_cast<Eigen::Index>(pts.size()));
+  for (size_t i = 0; i < pts.size(); ++i) {
+    out.col(static_cast<Eigen::Index>(i)) = pts[i];
+  }
+  return out;
+}
+
+}  // namespace
+
+TEST(Landmarks, RadiusIsFittedOnceTheSeenArcIsWideEnough)
+{
+  LineLandmarks lm(0.5, 1.0, 0.35, 0.03);
+  lm.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 0.0, 1);
+  const double r = 0.15;
+  const Cloud first = pillar_view(r, 0.0, 1.2);
+  EXPECT_EQ(lm.assign(8, first.rowwise().mean(), Eigen::Vector3d::UnitZ(), first), 1);
+  EXPECT_EQ(lm.radius(1), 0.0);
+  const Cloud second = pillar_view(r, 1.0, 2.6);
+  EXPECT_EQ(lm.assign(8, second.rowwise().mean(), Eigen::Vector3d::UnitZ(), second), 1);
+  EXPECT_NEAR(lm.radius(1), r, 0.01);
+  EXPECT_EQ(lm.radius(2), 0.0);
+}
+
+TEST(Landmarks, WithoutItsOwnRadiusALandmarkTakesTheMedianOfItsClass)
+{
+  LineLandmarks lm(0.5, 1.0, 0.35, 0.03);
+  lm.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 0.0, 1);
+  const Cloud wide = pillar_view(0.15, 0.0, M_PI);
+  EXPECT_EQ(lm.assign(8, wide.rowwise().mean(), Eigen::Vector3d::UnitZ(), wide), 1);
+  const Cloud narrow = (pillar_view(0.2, 0.0, 0.8).colwise() + Eigen::Vector3d(5.0, 0.0, 0.0)).eval();
+  EXPECT_EQ(lm.assign(8, narrow.rowwise().mean(), Eigen::Vector3d::UnitZ(), narrow), 2);
+  EXPECT_EQ(lm.assign(6, narrow.rowwise().mean(), Eigen::Vector3d::UnitZ(), narrow), 3);
+  EXPECT_NEAR(lm.radius(1), 0.15, 0.01);
+  EXPECT_NEAR(lm.radius(2), 0.15, 0.01);
+  EXPECT_EQ(lm.radius(3), 0.0);
+  const Cloud bigger = (pillar_view(0.25, 0.0, M_PI).colwise() + Eigen::Vector3d(10.0, 0.0, 0.0)).eval();
+  EXPECT_EQ(lm.assign(8, bigger.rowwise().mean(), Eigen::Vector3d::UnitZ(), bigger), 4);
+  EXPECT_EQ(lm.assign(8, bigger.rowwise().mean(), Eigen::Vector3d::UnitZ(), bigger), 4);
+  EXPECT_NEAR(lm.radius(4), 0.25, 0.01);
+  EXPECT_NEAR(lm.radius(2), 0.15, 0.01);
+}
+
+TEST(Landmarks, ALearnedRadiusStaysFixed)
+{
+  LineLandmarks lm(0.5, 1.0, 0.35, 0.03);
+  lm.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 0.0, 1);
+  const Cloud first = pillar_view(0.15, 0.0, M_PI);
+  EXPECT_EQ(lm.assign(8, first.rowwise().mean(), Eigen::Vector3d::UnitZ(), first), 1);
+  EXPECT_NEAR(lm.radius(1), 0.15, 0.01);
+  const Cloud other = pillar_view(0.1, M_PI, 2 * M_PI);
+  for (int i = 0; i < 5; ++i) {
+    EXPECT_EQ(lm.assign(8, first.rowwise().mean(), Eigen::Vector3d::UnitZ(), other), 1);
+  }
+  EXPECT_NEAR(lm.radius(1), 0.15, 0.01);
+}
+
+TEST(Landmarks, NoRadiusWithoutTheFit)
+{
+  LineLandmarks lm(0.5, 1.0, 0.35, 0.03);
+  const Cloud pts = pillar_view(0.15, 0.0, M_PI);
+  EXPECT_EQ(lm.assign(8, pts.rowwise().mean(), Eigen::Vector3d::UnitZ(), pts), 1);
+  EXPECT_EQ(lm.assign(8, pts.rowwise().mean(), Eigen::Vector3d::UnitZ(), pts), 1);
+  EXPECT_EQ(lm.radius(1), 0.0);
+}
+
+TEST(Landmarks, ADetectionNarrowerThanTheLearnedRadiusGetsNoId)
+{
+  LineLandmarks lm(0.5, 1.0, 0.35, 0.03);
+  lm.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 0.0, 1);
+  lm.set_min_width(0.5);
+  const Cloud pts = pillar_view(0.2, 0.0, M_PI);
+  const Eigen::Vector3d c = pts.rowwise().mean();
+  EXPECT_EQ(lm.assign(8, c, Eigen::Vector3d::UnitZ(), pts, 0.05), 1);
+  EXPECT_NEAR(lm.radius(1), 0.2, 0.01);
+  EXPECT_EQ(lm.assign(8, c + Eigen::Vector3d(0.4, 0, 0), Eigen::Vector3d::UnitZ(), Cloud(3, 0), 0.05), -1);
+  EXPECT_EQ(lm.assign(8, c, Eigen::Vector3d::UnitZ(), Cloud(3, 0), 0.3), 1);
+  EXPECT_EQ(lm.assign(8, c, Eigen::Vector3d::UnitZ()), 1);
+  EXPECT_EQ(lm.assign(8, c + Eigen::Vector3d(3.0, 0, 0), Eigen::Vector3d::UnitZ(), Cloud(3, 0), 0.05), 2);
+}
+
+TEST(Landmarks, RadiusNeedsItsCentreOnTheFarSideOfThePoints)
+{
+  const Cloud pts = pillar_view(0.15, 0.0, M_PI);
+  const Eigen::Vector3d c = pts.rowwise().mean();
+  LineLandmarks front(0.5, 1.0, 0.35, 0.03);
+  front.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 0.0, 1);
+  EXPECT_EQ(front.assign(8, c, Eigen::Vector3d::UnitZ(), pts, 0.0, Eigen::Vector3d(3.0, 4.0, 1.0)), 1);
+  EXPECT_NEAR(front.radius(1), 0.15, 0.01);
+  LineLandmarks behind(0.5, 1.0, 0.35, 0.03);
+  behind.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 0.0, 1);
+  EXPECT_EQ(behind.assign(8, c, Eigen::Vector3d::UnitZ(), pts, 0.0, Eigen::Vector3d(3.0, -2.0, 1.0)), 1);
+  EXPECT_EQ(behind.radius(1), 0.0);
+}
+
+TEST(Landmarks, PointsSeenBeyondTheRangeDoNotCount)
+{
+  const Cloud pts = pillar_view(0.15, 0.0, M_PI);
+  const Eigen::Vector3d c = pts.rowwise().mean();
+  LineLandmarks lm(0.5, 1.0, 0.35, 0.03);
+  lm.set_radius_fit(0.02, 100.0 * M_PI / 180.0, 5.0, 1);
+  EXPECT_EQ(lm.assign(8, c, Eigen::Vector3d::UnitZ(), pts, 0.0, Eigen::Vector3d(3.0, 10.0, 1.0)), 1);
+  EXPECT_EQ(lm.radius(1), 0.0);
+  EXPECT_EQ(lm.assign(8, c, Eigen::Vector3d::UnitZ(), pts, 0.0, Eigen::Vector3d(3.0, 3.0, 1.0)), 1);
+  EXPECT_NEAR(lm.radius(1), 0.15, 0.01);
+}

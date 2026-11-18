@@ -1,6 +1,7 @@
 #include "axial_perception/axial_frontend.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <charconv>
 #include <exception>
 #include <stdexcept>
@@ -90,7 +91,6 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   }
   const auto classes = declare_parameter<std::vector<int64_t>>("axial_classes", {4, 6, 8});
   const auto class_names = declare_parameter<std::vector<std::string>>("class_names", {"pipe", "duct", "pillar"});
-  const auto class_radius = declare_parameter<std::vector<double>>("class_radius", {0.0});
   const auto class_spawn = declare_parameter<std::vector<double>>("class_spawn_threshold", std::vector<double>{});
   const auto class_separation = declare_parameter<std::vector<double>>("class_min_separation", std::vector<double>{});
   const auto slam_classes = declare_parameter<std::vector<int64_t>>("slam_classes", std::vector<int64_t>{});
@@ -102,6 +102,24 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   const auto split_gap = declare_parameter<std::vector<double>>("split_gap", {0.5, 1.5, 1.0});
   split_min_points_ = static_cast<int>(declare_parameter<int64_t>("split_min_points", 5));
   split_min_length_ = declare_parameter<double>("split_min_length", 0.5);
+  const auto class_radius = declare_parameter<std::vector<double>>("class_radius", {0.0});
+  axis_method_ = declare_parameter<std::string>("axis_method", "radius");
+  if (axis_method_ != "radius" && axis_method_ != "learned") {
+    throw std::invalid_argument("axis_method must be radius or learned, got " + axis_method_);
+  }
+  for (const auto c : declare_parameter<std::vector<int64_t>>("round_classes", std::vector<int64_t>{})) {
+    round_classes_.push_back(static_cast<int>(c));
+  }
+  round_tol_ = declare_parameter<double>("round_tol", 0.05);
+  round_min_width_ = declare_parameter<double>("round_min_width", 0.0);
+  arc_trim_ = declare_parameter<double>("arc_trim", 0.05);
+  const double radius_band = declare_parameter<double>("radius_fit_band", 0.02);
+  const double radius_span = declare_parameter<double>("radius_min_span_deg", 100.0) * M_PI / 180.0;
+  const double radius_range = declare_parameter<double>("radius_max_range", 5.0);
+  if (axis_method_ == "learned") {
+    landmarks_.set_radius_fit(radius_band, radius_span, radius_range);
+    landmarks_.set_min_width(round_min_width_);
+  }
   max_rate_hz_ = positive(declare_parameter<double>("max_rate_hz", 10.0), "max_rate_hz");
   map_min_neighbours_ = static_cast<int>(declare_parameter<int64_t>("map_min_neighbours", 8));
   const double map_rate_hz = positive(declare_parameter<double>("map_rate_hz", 1.0), "map_rate_hz");
@@ -143,8 +161,10 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   projector_.classes.insert(projector_.classes.end(), point_classes.begin(), point_classes.end());
   names_ = zip(classes, class_names);
   names_.merge(zip(point_classes, point_names));
-  radius_ = zip(classes, class_radius);
   tols_ = zip(classes, split_tol);
+  if (axis_method_ == "radius") {
+    radius_ = zip(classes, class_radius);
+  }
   gaps_ = zip(classes, split_gap);
   if (map_frame_.empty()) {
     map_frame_ = odom_frame_;
@@ -291,10 +311,25 @@ void AxialFrontend::process(const Image & msg, const std::string & frame, const 
   }
   const Cloud kept = select(pts, l.idx);
   const auto split_start = std::chrono::steady_clock::now();
-  const Labels line = split_clusters(kept, l.cls, l.seg, split_method_, tols_, split_min_points_, gaps_,
+  Labels line = split_clusters(kept, l.cls, l.seg, split_method_, tols_, split_min_points_, gaps_,
       split_min_length_);
+  if (!round_classes_.empty()) {
+    line = surface_filter(
+      kept, l.cls, l.seg, line, round_classes_, round_tol_, 0.05, split_min_points_, radius_, round_min_width_);
+  }
+  std::map<int, double> widths;
+  if (axis_method_ == "learned") {
+    for (const auto & [k, sel] : groups(line)) {
+      if (std::find(round_classes_.begin(), round_classes_.end(), l.cls[static_cast<size_t>(sel.front())]) !=
+        round_classes_.end())
+      {
+        widths[k] = seen_width(select(kept, sel));
+      }
+    }
+  }
   const double split_dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - split_start).count();
-  const auto ids = landmarks_.update(to_map.apply(select(odom, l.idx)), l.cls, line);
+  const Eigen::Vector3d viewer = to_map.apply(Eigen::Vector3d(-tf.R.transpose() * tf.t));
+  const auto ids = landmarks_.update(to_map.apply(select(odom, l.idx)), l.cls, line, widths, viewer);
   if (!ids.empty()) {
     publish_detections(msg.header.stamp, frame, kept, l.cls, line, ids);
   }
@@ -336,9 +371,20 @@ void AxialFrontend::publish_detections(
     if (std::find(slam_classes_.begin(), slam_classes_.end(), c) == slam_classes_.end()) {
       continue;
     }
-    const Line fit = fit_line(select(xyz, sel));
-    const auto r = radius_.find(c);
-    const Eigen::Vector3d p = tf->apply(axis_from_surface(fit.c, fit.d, r == radius_.end() ? 0.0 : r->second));
+    const Cloud seen = select(xyz, sel);
+    const Line fit = fit_line(seen);
+    const bool round = std::find(round_classes_.begin(), round_classes_.end(), c) != round_classes_.end();
+    double radius = 0.0;
+    if (axis_method_ == "learned") {
+      radius = round ? landmarks_.radius(gid) : 0.0;
+      if (round && radius <= 0.0) {
+        continue;
+      }
+    } else if (const auto r = radius_.find(c); r != radius_.end()) {
+      radius = r->second;
+    }
+    const Eigen::Vector3d p = tf->apply(round ? axis_from_arc(seen, fit, radius, arc_trim_) :
+      axis_from_surface(fit.c, fit.d, radius));
     const Eigen::Vector3d d = tf->R * fit.d;
     dps_slam_msgs::msg::DetectionWithID det;
     det.label = name_of(c);
