@@ -82,7 +82,9 @@ The node is C++ (`src/axial_frontend.cpp`). The ROS-free maths lives in the othe
 params file (`-c`), run with `ros2 run axial_perception <benchmark>`: `mask_clusters_gt` (points off their surface),
 `line_segments_gt` (split methods, live or from a saved `.bin`), `record_clusters` and `landmark_map_gt` (the
 landmark map against the pillars), `record_raw` and `turn_dataset` (raw frames of pipe and duct turns, scored
-offline). Datasets are zlib-compressed `.bin` files, passed with `-d`, `--raw`, `--clusters` or `--load`, and are kept
+offline). `line_eval.py <map.npz> --gt <world>` scores a saved landmark map, and the DPS-SLAM lines if the file has them,
+against the GT pillar, pipe and duct axes of every class: matched, ghosts, duplicates, length covered, offset, z and
+lateral error. Datasets are zlib-compressed `.bin` files, passed with `-d`, `--raw`, `--clusters` or `--load`, and are kept
 outside the repo.
 
 | Topic | Type | |

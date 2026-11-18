@@ -72,10 +72,13 @@ foreach(name landmark_map_gt line_segments_gt mask_clusters_gt record_clusters r
 endforeach()
 target_link_libraries(turn_dataset ${OpenCV_LIBS})
 
+install(PROGRAMS benchmarks/line_eval.py DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch rviz DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_line_eval test/test_line_eval.py)
   foreach(name camera clusters kdtree landmarks masks occlusion point_landmarks scan_buffer segments)
     ament_add_gtest(test_${name}_cpp test/test_${name}.cpp)
     target_link_libraries(test_${name}_cpp axial_core)
