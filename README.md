@@ -122,6 +122,9 @@ Parameters, with defaults:
 | `round_classes` | `[]` | classes with a round cross-section: points behind the front surface by more than the radius + `round_tol` (0.05) dropped, and the axis fitted to the seen arc, points off the circle by more than `arc_trim` (0.05) left out |
 | `round_min_width` | 0.0 | round lines narrower across than this times the radius are dropped (a strip of ceiling inside a duct mask) |
 | `axis_method` | `radius` | `radius`: the axis `class_radius` behind the surface; `learned`: each landmark fits its radius to the cross-section of its points seen within `radius_max_range` (5.0 m), fixed once the inliers (`radius_fit_band`, 0.02 m) span `radius_min_span_deg` (100); until then the median of its class |
+| `aligned_classes`, `aligned_tol_deg` | `[]`, 8.0 | lines of these classes more than `aligned_tol_deg` from horizontal and vertical in `odom_frame` are dropped; the rest are snapped to it |
+| `line_dir_std`, `line_offset_std` | 0.05, 0.1 | covariance of the line detections, direction in rad and offset in m |
+| `aligned_dir_std` | `line_dir_std` | direction std of the snapped lines on their tilt: both axes of a vertical line, the vertical axis of a horizontal one |
 
 ```bash
 ros2 launch axial_perception axial_frontend.launch.py params_file:=<yaml> [rviz:=true fixed_frame:=<frame>] [use_sim_time:=true]

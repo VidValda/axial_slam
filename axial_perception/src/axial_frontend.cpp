@@ -120,6 +120,10 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
     landmarks_.set_radius_fit(radius_band, radius_span, radius_range);
     landmarks_.set_min_width(round_min_width_);
   }
+  for (const auto c : declare_parameter<std::vector<int64_t>>("aligned_classes", std::vector<int64_t>{})) {
+    aligned_classes_.push_back(static_cast<int>(c));
+  }
+  aligned_tol_ = declare_parameter<double>("aligned_tol_deg", 8.0) * M_PI / 180.0;
   max_rate_hz_ = positive(declare_parameter<double>("max_rate_hz", 10.0), "max_rate_hz");
   map_min_neighbours_ = static_cast<int>(declare_parameter<int64_t>("map_min_neighbours", 8));
   const double map_rate_hz = positive(declare_parameter<double>("map_rate_hz", 1.0), "map_rate_hz");
@@ -127,8 +131,9 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   const auto slam_optimized_topic = declare_parameter<std::string>("slam_optimized_topic", "");
   detection_frame_ = declare_parameter<std::string>("detection_frame", "");
   detection_frame_id_ = declare_parameter<std::string>("detection_frame_id", "");
-  const double dir_std = declare_parameter<double>("line_dir_std", 0.05);
+  dir_std_ = declare_parameter<double>("line_dir_std", 0.05);
   const double offset_std = declare_parameter<double>("line_offset_std", 0.1);
+  aligned_dir_std_ = declare_parameter<double>("aligned_dir_std", dir_std_);
 
   check_occlusion_method(projector_.occlusion_method);
   split_method(split_method_);
@@ -169,7 +174,7 @@ AxialFrontend::AxialFrontend(const rclcpp::NodeOptions & options)
   if (map_frame_.empty()) {
     map_frame_ = odom_frame_;
   }
-  const std::array<double, 4> var{dir_std * dir_std, dir_std * dir_std, offset_std * offset_std,
+  const std::array<double, 4> var{dir_std_ * dir_std_, dir_std_ * dir_std_, offset_std * offset_std,
     offset_std * offset_std};
   for (size_t i = 0; i < 4; ++i) {
     line_cov_[5 * i] = var[i];
@@ -317,6 +322,9 @@ void AxialFrontend::process(const Image & msg, const std::string & frame, const 
     line = surface_filter(
       kept, l.cls, l.seg, line, round_classes_, round_tol_, 0.05, split_min_points_, radius_, round_min_width_);
   }
+  if (!aligned_classes_.empty()) {
+    line = aligned_filter(kept, l.cls, line, tf.R.transpose(), aligned_classes_, aligned_tol_);
+  }
   std::map<int, double> widths;
   if (axis_method_ == "learned") {
     for (const auto & [k, sel] : groups(line)) {
@@ -331,7 +339,7 @@ void AxialFrontend::process(const Image & msg, const std::string & frame, const 
   const Eigen::Vector3d viewer = to_map.apply(Eigen::Vector3d(-tf.R.transpose() * tf.t));
   const auto ids = landmarks_.update(to_map.apply(select(odom, l.idx)), l.cls, line, widths, viewer);
   if (!ids.empty()) {
-    publish_detections(msg.header.stamp, frame, kept, l.cls, line, ids);
+    publish_detections(msg.header.stamp, frame, kept, l.cls, line, ids, tf.R.transpose());
   }
   publish_clusters(msg.header.stamp, frame, kept, l.cls, l.seg, line);
   if (pub_overlay_->get_subscription_count() > 0 && image_) {
@@ -352,7 +360,8 @@ void AxialFrontend::process(const Image & msg, const std::string & frame, const 
 
 void AxialFrontend::publish_detections(
   const builtin_interfaces::msg::Time & stamp, const std::string & frame, const Cloud & xyz,
-  const std::vector<int> & cls, const Labels & line, const std::map<int, int> & ids)
+  const std::vector<int> & cls, const Labels & line, const std::map<int, int> & ids,
+  const Eigen::Matrix3d & to_odom)
 {
   const std::string target = detection_frame_.empty() ? frame : detection_frame_;
   const auto tf = target == frame ? std::optional<Rigid>(Rigid{}) : lookup(target, frame, stamp);
@@ -372,7 +381,16 @@ void AxialFrontend::publish_detections(
       continue;
     }
     const Cloud seen = select(xyz, sel);
-    const Line fit = fit_line(seen);
+    Line fit = fit_line(seen);
+    std::array<double, 16> cov = line_cov_;
+    if (std::find(aligned_classes_.begin(), aligned_classes_.end(), c) != aligned_classes_.end()) {
+      fit.d = to_odom.transpose() * snap_aligned(to_odom * fit.d, aligned_tol_);
+      const Eigen::Matrix2d dir = tilt_covariance(
+        tf->R * fit.d, tf->R * to_odom.transpose() * Eigen::Vector3d::UnitZ(), dir_std_, aligned_dir_std_);
+      cov[0] = dir(0, 0);
+      cov[1] = cov[4] = dir(0, 1);
+      cov[5] = dir(1, 1);
+    }
     const bool round = std::find(round_classes_.begin(), round_classes_.end(), c) != round_classes_.end();
     double radius = 0.0;
     if (axis_method_ == "learned") {
@@ -394,7 +412,7 @@ void AxialFrontend::publish_detections(
     det.geometry.line3d.direction.x = d[0];
     det.geometry.line3d.direction.y = d[1];
     det.geometry.line3d.direction.z = d[2];
-    std::copy(line_cov_.begin(), line_cov_.end(), det.geometry.line3d.covariance.begin());
+    std::copy(cov.begin(), cov.end(), det.geometry.line3d.covariance.begin());
     out.detections.push_back(std::move(det));
   }
   if (!out.detections.empty()) {

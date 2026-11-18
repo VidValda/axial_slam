@@ -226,6 +226,59 @@ TEST(Segments, SegmentedLsqSplitsAnL)
   EXPECT_EQ(l.back(), 1);
 }
 
+TEST(AlignedFilter, DropsLinesNeitherHorizontalNorVertical)
+{
+  Eigen::Matrix3d to_world;
+  to_world << 0, 0, 1, -1, 0, 0, 0, -1, 0;
+  const auto tilt = [](double deg) {
+      return Eigen::Vector3d(std::cos(deg * M_PI / 180.0), 0.0, std::sin(deg * M_PI / 180.0));
+    };
+  const std::vector<std::pair<Eigen::Vector3d, int>> lines = {
+    {tilt(0.0), 6}, {tilt(5.0), 6}, {tilt(15.0), 6}, {tilt(87.0), 6}, {tilt(15.0), 4}};
+  Cloud pts(3, 50 * static_cast<Eigen::Index>(lines.size()));
+  std::vector<int> cls;
+  Labels labels;
+  for (size_t k = 0; k < lines.size(); ++k) {
+    const Eigen::Vector3d start(4.0, 1.0 * static_cast<double>(k), 1.0);
+    for (int i = 0; i < 50; ++i) {
+      pts.col(static_cast<Eigen::Index>(50 * k) + i) = to_world.transpose() * (start + 0.04 * i * lines[k].first);
+      cls.push_back(lines[k].second);
+      labels.push_back(static_cast<int>(k) + 1);
+    }
+  }
+  const Labels out = axial_perception::aligned_filter(pts, cls, labels, to_world, {6}, 8.0 * M_PI / 180.0);
+  for (size_t k = 0; k < lines.size(); ++k) {
+    EXPECT_EQ(out[50 * k], k == 2 ? 0 : static_cast<int>(k) + 1) << k;
+  }
+}
+
+TEST(SnapAligned, SnapsNearVerticalAndNearHorizontalDirections)
+{
+  const double tol = 5.0 * M_PI / 180.0;
+  const Eigen::Vector3d up = axial_perception::snap_aligned(Eigen::Vector3d(0.03, -0.02, -1.0), tol);
+  EXPECT_TRUE(up.isApprox(Eigen::Vector3d(0.0, 0.0, -1.0)));
+  const Eigen::Vector3d flat = axial_perception::snap_aligned(Eigen::Vector3d(3.0, 4.0, 0.2), tol);
+  EXPECT_TRUE(flat.isApprox(Eigen::Vector3d(0.6, 0.8, 0.0)));
+  const Eigen::Vector3d tilted(1.0, 0.0, 1.0);
+  EXPECT_TRUE(axial_perception::snap_aligned(tilted, tol).isApprox(tilted.normalized()));
+}
+
+TEST(TiltCovariance, TightOnlyAlongTheTiltOfAHorizontalLine)
+{
+  const Eigen::Vector3d up(std::sin(0.1), 0.0, std::cos(0.1));
+  const Eigen::Vector3d d(0.0, 1.0, 0.0);
+  const Eigen::Matrix2d cov = axial_perception::tilt_covariance(d, up, 0.03, 0.001);
+  const Eigen::Vector3d b1 = d.cross(Eigen::Vector3d::UnitZ()).normalized();
+  const Eigen::Vector3d b2 = d.cross(b1);
+  const Eigen::Vector2d tilt = Eigen::Vector2d(b1.dot(up), b2.dot(up)).normalized();
+  const Eigen::Vector2d heading(-tilt.y(), tilt.x());
+  EXPECT_NEAR(tilt.dot(cov * tilt), 0.001 * 0.001, 1e-12);
+  EXPECT_NEAR(heading.dot(cov * heading), 0.03 * 0.03, 1e-12);
+  EXPECT_NEAR(tilt.dot(cov * heading), 0.0, 1e-12);
+  const Eigen::Matrix2d vertical = axial_perception::tilt_covariance(up, up, 0.03, 0.001);
+  EXPECT_TRUE(vertical.isApprox(0.001 * 0.001 * Eigen::Matrix2d::Identity()));
+}
+
 TEST(SurfaceFilter, DropsTheBackgroundSeenPastTheEdgeOfARoundObject)
 {
   const double r = 0.2;

@@ -67,7 +67,8 @@ private:
   void flush_labels();
   void publish_detections(
     const builtin_interfaces::msg::Time & stamp, const std::string & frame, const Cloud & xyz,
-    const std::vector<int> & cls, const Labels & line, const std::map<int, int> & ids);
+    const std::vector<int> & cls, const Labels & line, const std::map<int, int> & ids,
+    const Eigen::Matrix3d & to_odom);
   void publish_clusters(
     const builtin_interfaces::msg::Time & stamp, const std::string & frame, const Cloud & xyz,
     const std::vector<int> & cls, const std::vector<int> & seg, const Labels & line);
@@ -85,6 +86,8 @@ private:
   std::string axis_method_;
   std::map<int, double> radius_;
   std::vector<int> round_classes_;
+  std::vector<int> aligned_classes_;
+  double aligned_tol_;
   double round_tol_;
   double round_min_width_;
   double arc_trim_;
@@ -96,6 +99,8 @@ private:
   std::string detection_frame_;
   std::string detection_frame_id_;
   std::array<double, 16> line_cov_{};
+  double dir_std_;
+  double aligned_dir_std_;
 
   std::shared_ptr<tf2_ros::Buffer> tf_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

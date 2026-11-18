@@ -63,6 +63,11 @@ Labels gap_split(const Cloud & pts, const Labels & labels, double gap, int min_p
 Labels merge_lines(const Cloud & pts, Labels labels, double tol, double share = 0.95);
 Labels finish(const Cloud & pts, const Labels & labels, double tol, int min_points, double gap);
 Labels drop_short(const Cloud & pts, const Labels & labels, double min_length);
+Labels aligned_filter(
+  const Cloud & pts, const std::vector<int> & cls, const Labels & labels, const Eigen::Matrix3d & to_world,
+  const std::vector<int> & classes, double tol);
+Eigen::Vector3d snap_aligned(const Eigen::Vector3d & d, double tol);
+Eigen::Matrix2d tilt_covariance(const Eigen::Vector3d & d, const Eigen::Vector3d & up, double std, double tilt_std);
 Labels surface_filter(
   const Cloud & pts, const std::vector<int> & cls, const std::vector<int> & seg, const Labels & labels,
   const std::vector<int> & classes, double tol, double trim, int min_points,

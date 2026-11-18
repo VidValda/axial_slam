@@ -554,6 +554,51 @@ Labels drop_short(const Cloud & pts, const Labels & labels, double min_length)
   return out;
 }
 
+Labels aligned_filter(
+  const Cloud & pts, const std::vector<int> & cls, const Labels & labels, const Eigen::Matrix3d & to_world,
+  const std::vector<int> & classes, double tol)
+{
+  Labels out = labels;
+  for (const auto & [k, sel] : groups(labels)) {
+    if (std::find(classes.begin(), classes.end(), cls[static_cast<size_t>(sel.front())]) == classes.end()) {
+      continue;
+    }
+    const double z = std::abs((to_world * fit_line(select(pts, sel)).d).normalized().z());
+    if (z > std::sin(tol) && z < std::cos(tol)) {
+      for (const auto i : sel) {
+        out[static_cast<size_t>(i)] = 0;
+      }
+    }
+  }
+  return out;
+}
+
+Eigen::Vector3d snap_aligned(const Eigen::Vector3d & d, double tol)
+{
+  const Eigen::Vector3d u = d.normalized();
+  if (std::abs(u.z()) >= std::cos(tol)) {
+    return Eigen::Vector3d(0.0, 0.0, u.z() < 0.0 ? -1.0 : 1.0);
+  }
+  if (std::abs(u.z()) <= std::sin(tol)) {
+    return Eigen::Vector3d(u.x(), u.y(), 0.0).normalized();
+  }
+  return u;
+}
+
+Eigen::Matrix2d tilt_covariance(const Eigen::Vector3d & d, const Eigen::Vector3d & up, double std, double tilt_std)
+{
+  const Eigen::Vector3d m = d.normalized();
+  const Eigen::Vector3d ref = std::abs(m.z()) < 0.9 ? Eigen::Vector3d::UnitZ() : Eigen::Vector3d::UnitX();
+  const Eigen::Vector3d b1 = m.cross(ref).normalized();
+  const Eigen::Vector3d b2 = m.cross(b1);
+  const Eigen::Vector2d u(b1.dot(up), b2.dot(up));
+  if (u.norm() < 1e-6) {
+    return tilt_std * tilt_std * Eigen::Matrix2d::Identity();
+  }
+  const Eigen::Vector2d t = u.normalized();
+  return std * std * (Eigen::Matrix2d::Identity() - t * t.transpose()) + tilt_std * tilt_std * t * t.transpose();
+}
+
 Labels surface_filter(
   const Cloud & pts, const std::vector<int> & cls, const std::vector<int> & seg, const Labels & labels,
   const std::vector<int> & classes, double tol, double trim, int min_points, const std::map<int, double> & radius,
